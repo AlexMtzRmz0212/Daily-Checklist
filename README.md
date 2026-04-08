@@ -32,14 +32,15 @@ python -m venv .venv
 source .venv/bin/activate # Mac/Linux
 
 # Install & run
-pip install -r requirements.txt
+pip install fastapi "uvicorn[standard]" httpx pydantic
 uvicorn main:app --reload --port 8000
 ```
 
 ### 4 — Frontend (new terminal)
 
 ```bash
-cd frontend
+cd task-sorter
+
 npm install
 npm run dev
 ```
@@ -150,3 +151,10 @@ Daily-Checklist/
 MIT
 
 ---
+
+
+## Contact
+
+Questions, comments, or suggestions? Send an email to [alejandro.martinez.rmz97@gmail.com](mailto:alejandro.martinez.rmz97@gmail.com) with the subject line: **AI Task Sorter — [Your Topic]**
+
+We'd love to hear your feedback!
