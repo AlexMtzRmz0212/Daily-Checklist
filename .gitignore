@@ -200,7 +200,6 @@ __pycache__/
 .ruff_cache/
 
 # Data files (user-specific)
-tasks.json
 *.db
 *.sqlite
 *.sqlite3
@@ -231,4 +230,4 @@ Thumbs.db
 .DS_Store
 Thumbs.db
 desktop.ini
-tasks.json
+./tasks.json
