@@ -9,7 +9,7 @@ const PROPERTIES = [
   { key: "Importance",    label: "IMPORTANCE", hex: "#facc15", bar: "#eab308" },
   { key: "Relevance",     label: "RELEVANCE",  hex: "#34d399", bar: "#10b981" },
   { key: "Difficulty",    label: "DIFFICULTY", hex: "#c084fc", bar: "#a855f7" },
-  { key: "Time_Estimate", label: "TIME",       hex: "#60a5fa", bar: "#3b82f6" },
+  { key: "Time_Minutes",  label: "TIME (min)", hex: "#60a5fa", bar: "#3b82f6" },
   { key: "Hierarchy",     label: "HIERARCHY",  hex: "#f472b6", bar: "#ec4899" },
 ];
 
@@ -63,6 +63,34 @@ export default function App() {
   const [newModel, setNewModel] = useState("");
   const [modelSavePhase, setModelSavePhase] = useState("idle");
   const [modelError, setModelError] = useState("");
+  
+  const [propertyModes, setPropertyModes] = useState({});
+  const [modeSavePhase, setModeSavePhase] = useState("idle");
+
+  const [showAIPlanModal, setShowAIPlanModal] = useState(false);
+  const [aiPlanResult, setAIPlanResult] = useState(null);
+  const [aiPlanPhase, setAiPlanPhase] = useState("idle");
+
+  // Fetch current modes on mount
+  useEffect(() => {
+    apiFetch("/config/properties").then(data => {
+      setPropertyModes(data.property_modes);
+    }).catch(console.error);
+  }, []);
+
+  // Save modes
+  const handleSaveModes = async () => {
+    setModeSavePhase("loading");
+    try {
+      await apiFetch("/config/properties", {
+        method: "POST",
+        body: JSON.stringify({ property_modes: propertyModes })
+      });
+      setModeSavePhase("idle");
+    } catch (e) {
+      setModeSavePhase("error");
+    }
+  };
 
   // Single add
   const [form, setForm]       = useState({ name: "", context: "" });
@@ -110,12 +138,30 @@ export default function App() {
 
   const hasUnsavedEdits = Object.keys(localEdits).length > 0;
 
-  const adjustProp = useCallback((taskId, key, delta) => {
+  const adjustProp = useCallback((taskId, key, delta, presetValue = null) => {
     setLocalEdits((prev) => {
       const existing = prev[taskId] ?? {};
       const base = tasks.find((t) => t.Task_ID === taskId)?.[key] ?? 5;
-      const cur  = existing[key] !== undefined ? existing[key] : base;
-      return { ...prev, [taskId]: { ...existing, [key]: Math.min(10, Math.max(1, cur + delta)) } };
+      const cur = existing[key] !== undefined ? existing[key] : base;
+      
+      let newValue;
+      if (key === "Time_Minutes") {
+        // Special handling for Time_Minutes
+        const TIME_PRESETS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 480, 960, 1440];
+        const currentIndex = TIME_PRESETS.indexOf(cur);
+        if (delta === -1 && currentIndex > 0) {
+          newValue = TIME_PRESETS[currentIndex - 1];
+        } else if (delta === 1 && currentIndex < TIME_PRESETS.length - 1) {
+          newValue = TIME_PRESETS[currentIndex + 1];
+        } else {
+          newValue = cur;
+        }
+      } else {
+        // Normal 1-10 scale
+        newValue = Math.min(10, Math.max(1, cur + delta));
+      }
+      
+      return { ...prev, [taskId]: { ...existing, [key]: newValue } };
     });
   }, [tasks]);
 
@@ -227,6 +273,28 @@ export default function App() {
     } catch (e) {
       if (e.name === "AbortError" || signal?.aborted) return;
       setSortError(e.message); setSortPhase("idle");
+    }
+  };
+
+  const handleAIPlan = async () => {
+    const mergedTasks = tasks.map(merged);
+    setAiPlanPhase("loading");
+    try {
+      const result = await apiFetch("/tasks/ai-plan", {
+        method: "POST",
+        body: JSON.stringify({ tasks: mergedTasks })
+      });
+      setAIPlanResult(result);
+      setShowAIPlanModal(true);
+      
+      // Optional: Apply the sorting
+      const byId = Object.fromEntries(mergedTasks.map((t) => [t.Task_ID, t]));
+      setTasks(result.sorted_ids.map((id) => byId[id]).filter(Boolean));
+      setLocalEdits({});
+    } catch (e) {
+      console.error("AI Plan failed:", e);
+    } finally {
+      setAiPlanPhase("idle");
     }
   };
 
@@ -348,6 +416,7 @@ export default function App() {
               style={{ background: "#0f172a", border: "1px solid rgba(6,182,212,0.3)" }}
               onClick={(e) => e.stopPropagation()}
             >
+              {/* Header */}
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-black" style={{
                   background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 100%)",
@@ -360,7 +429,8 @@ export default function App() {
                   ✕
                 </button>
               </div>
-
+              
+              {/* Model Input Section - THIS ALREADY EXISTS */}
               <div className="mb-6">
                 <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">
                   OpenRouter Model
@@ -383,6 +453,56 @@ export default function App() {
                 </p>
               </div>
 
+              {/* PROPERTY MODES SECTION */}
+              <div className="mb-6">
+                <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-3">
+                  Scoring Modes
+                </label>
+                <div className="space-y-2">
+                  {Object.keys(propertyModes).map(prop => {
+                    if (prop === "Time_Minutes") return null;
+                    return (
+                      <div key={prop} className="flex items-center justify-between py-2 border-b border-white/5">
+                        <span className="text-xs text-gray-300">{prop}</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setPropertyModes(prev => ({ ...prev, [prop]: "scale" }))}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
+                              propertyModes[prop] === "scale" 
+                                ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" 
+                                : "text-gray-600 hover:text-gray-400"
+                            }`}
+                          >
+                            Scale (1-10)
+                          </button>
+                          <button
+                            onClick={() => setPropertyModes(prev => ({ ...prev, [prop]: "binary" }))}
+                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
+                              propertyModes[prop] === "binary" 
+                                ? "bg-purple-500/20 text-purple-400 border border-purple-500/30" 
+                                : "text-gray-600 hover:text-gray-400"
+                            }`}
+                          >
+                            Binary (Yes/No)
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleSaveModes}
+                  disabled={modeSavePhase === "loading"}
+                  className="w-full mt-4 py-2 rounded-xl font-black text-xs tracking-widest disabled:opacity-40"
+                  style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}
+                >
+                  {modeSavePhase === "loading" ? "SAVING..." : "💾 SAVE MODES"}
+                </motion.button>
+              </div>
+
+              {/* Model Error (if any) */}
               {modelError && (
                 <p className="text-red-400 text-xs mb-4">⚠ {modelError}</p>
               )}
@@ -516,6 +636,49 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      
+      {/* AI PLAN MODAL */}
+      <AnimatePresence>
+        {showAIPlanModal && aiPlanResult && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] flex items-center justify-center"
+            style={{ background: "rgba(2,6,23,0.95)", backdropFilter: "blur(8px)" }}
+            onClick={() => setShowAIPlanModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0, y: 24 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.85, opacity: 0, y: 24 }}
+              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="w-full max-w-2xl mx-4 rounded-2xl p-6"
+              style={{ background: "#0f172a", border: "1px solid rgba(6,182,212,0.3)" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-black" style={{
+                  background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 100%)",
+                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                }}>🤖 AI Action Plan</h2>
+                <button onClick={() => setShowAIPlanModal(false)} className="text-gray-600 hover:text-gray-400">✕</button>
+              </div>
+              <div className="max-h-96 overflow-y-auto space-y-4">
+                <div>
+                  <h3 className="text-cyan-400 text-sm font-black mb-2">📋 Action Plan</h3>
+                  <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">{aiPlanResult.plan_text}</p>
+                </div>
+                <div>
+                  <h3 className="text-purple-400 text-sm font-black mb-2">🧠 Reasoning</h3>
+                  <p className="text-gray-400 text-sm leading-relaxed">{aiPlanResult.reasoning}</p>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
 
       {/* Main */}
       <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 py-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
@@ -622,6 +785,17 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-2">
+              <motion.button 
+                whileHover={{ scale: 1.05 }} 
+                whileTap={{ scale: 0.94 }} 
+                onClick={handleAIPlan}
+                disabled={aiPlanPhase === "loading"}
+                className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}
+              >
+                {aiPlanPhase === "loading" ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span> : "🤖 AI PLAN"}
+              </motion.button>
+
               <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
                 disabled={isRevaluating}
                 className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40 disabled:cursor-not-allowed"
@@ -647,15 +821,22 @@ export default function App() {
           <LayoutGroup>
             <AnimatePresence mode="popLayout">
               {sortedTasks.map((task, index) => (
-                <TaskCard key={task.Task_ID} task={task} rank={index + 1}
+                <TaskCard 
+                  key={task.Task_ID} 
+                  task={task} 
+                  rank={index + 1}
                   isExiting={exitingIds.has(task.Task_ID)}
-                  getVal={getVal} adjustProp={adjustProp}
-                  onComplete={handleComplete} onDelete={handleDelete}
+                  getVal={getVal} 
+                  adjustProp={adjustProp}
+                  propertyModes={propertyModes}
+                  onComplete={handleComplete} 
+                  onDelete={handleDelete}
                   onPostpone={openPostpone}
                   onSubtaskAdded={handleSubtaskAdded}
                   onSubtaskToggled={handleSubtaskToggled}
                   onSubtaskDeleted={handleSubtaskDeleted}
-                  prefersReduced={prefersReduced} />
+                  prefersReduced={prefersReduced} 
+                />
               ))}
             </AnimatePresence>
           </LayoutGroup>
@@ -664,6 +845,7 @@ export default function App() {
             tasks={sortedTasks}
             getVal={getVal}
             adjustProp={adjustProp}
+            propertyModes={propertyModes}
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSortColumn}
@@ -688,11 +870,18 @@ export default function App() {
   );
 }
 
+function formatMinutes(minutes) {
+  if (minutes < 60) return `${minutes}min`;
+  if (minutes === 60) return "1h";
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return `${Math.floor(minutes / 1440)}d`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  TaskTable Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskTable({ tasks, getVal, adjustProp, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
   const [expandedTask, setExpandedTask] = useState(null);
   
   const SortIcon = ({ column }) => {
@@ -722,7 +911,7 @@ function TaskTable({ tasks, getVal, adjustProp, sortColumn, sortDirection, onSor
             <TableHeader column="Importance" label="Imp" />
             <TableHeader column="Relevance" label="Rel" />
             <TableHeader column="Difficulty" label="Diff" />
-            <TableHeader column="Time_Estimate" label="Time" />
+            <TableHeader column="Time_Minutes" label="Time" />
             <TableHeader column="Hierarchy" label="Hier" />
             <th className="px-4 py-3 w-24"></th>
           </tr>
@@ -735,6 +924,7 @@ function TaskTable({ tasks, getVal, adjustProp, sortColumn, sortDirection, onSor
               index={idx}
               getVal={getVal}
               adjustProp={adjustProp}
+              propertyModes={propertyModes}
               isExpanded={expandedTask === task.Task_ID}
               onToggleExpand={() => setExpandedTask(expandedTask === task.Task_ID ? null : task.Task_ID)}
               onComplete={onComplete}
@@ -751,32 +941,62 @@ function TaskTable({ tasks, getVal, adjustProp, sortColumn, sortDirection, onSor
   );
 }
 
-function TaskTableRow({ task, index, getVal, adjustProp, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
   const heat = Math.round((getVal(task, "Urgency") * getVal(task, "Importance")) / 10);
   
   const PropertyCell = ({ propKey, label }) => {
     const value = getVal(task, propKey);
     const prop = PROPERTIES.find(p => p.key === propKey);
+    const mode = propertyModes[propKey] || "scale"; 
+    
+    if (propKey === "Time_Minutes") {
+      return (
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2">
+            <button onClick={() => adjustProp(task.Task_ID, propKey, -1)}>−</button>
+            <span className="font-mono text-sm font-bold w-12 text-center" style={{ color: prop?.hex }}>
+              {formatMinutes(value)}
+            </span>
+            <button onClick={() => adjustProp(task.Task_ID, propKey, 1)}>＋</button>
+          </div>
+        </td>
+      );
+    }
+    
+    // For binary mode
+    if (mode === "binary") {
+      return (
+        <td className="px-4 py-3">
+          <button
+            onClick={() => {
+              // Toggle between 1 and 10
+              if (value === 10) {
+                adjustProp(task.Task_ID, propKey, -9); // 10 → 1
+              } else {
+                adjustProp(task.Task_ID, propKey, 9);  // 1 → 10
+              }
+            }}
+            className="px-3 py-1 rounded-lg text-xs font-black"
+            style={{
+              background: value === 10 ? "rgba(74,222,128,0.2)" : "rgba(255,255,255,0.06)",
+              color: value === 10 ? "#4ade80" : "#94a3b8"
+            }}
+          >
+            {value === 10 ? "YES" : "NO"}
+          </button>
+        </td>
+      );
+    }
+    
+    // Normal scale mode
     return (
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => adjustProp(task.Task_ID, propKey, -1)}
-            className="w-5 h-5 rounded flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
-            style={{ color: "#64748b" }}
-          >
-            −
-          </button>
+          <button onClick={() => adjustProp(task.Task_ID, propKey, -1)}>−</button>
           <span className="font-mono text-sm font-bold w-6 text-center" style={{ color: prop?.hex }}>
             {value}
           </span>
-          <button
-            onClick={() => adjustProp(task.Task_ID, propKey, 1)}
-            className="w-5 h-5 rounded flex items-center justify-center text-xs hover:bg-white/10 transition-colors"
-            style={{ color: "#64748b" }}
-          >
-            ＋
-          </button>
+          <button onClick={() => adjustProp(task.Task_ID, propKey, 1)}>＋</button>
         </div>
       </td>
     );
@@ -800,7 +1020,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, isExpanded, onToggleExp
         <PropertyCell propKey="Importance" />
         <PropertyCell propKey="Relevance" />
         <PropertyCell propKey="Difficulty" />
-        <PropertyCell propKey="Time_Estimate" />
+        <PropertyCell propKey="Time_Minutes" />
         <PropertyCell propKey="Hierarchy" />
         <td className="px-4 py-3">
           <div className="flex gap-2">
@@ -946,7 +1166,7 @@ function SubtaskAddInline({ taskId, onAdded }) {
 //  TaskCard (existing, unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, rank, isExiting, getVal, adjustProp, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
+function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
   const [expanded, setExpanded] = useState(false);
   const spring = { type: "spring", stiffness: 380, damping: 38 };
 
@@ -1040,9 +1260,16 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, onComplete, onDel
             {/* Property controls */}
             <div className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
               {PROPERTIES.map(({ key, label, hex, bar }) => (
-                <PropertyControl key={key} label={label} value={getVal(task, key)} hex={hex} bar={bar}
+                <PropertyControl 
+                  key={key} 
+                  label={label} 
+                  value={getVal(task, key)} 
+                  hex={hex} 
+                  bar={bar}
+                  mode={propertyModes[key]}
                   onDec={() => adjustProp(task.Task_ID, key, -1)}
-                  onInc={() => adjustProp(task.Task_ID, key,  1)} />
+                  onInc={() => adjustProp(task.Task_ID, key, 1)} 
+                />
               ))}
             </div>
 
@@ -1207,7 +1434,38 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
   );
 }
 
-function PropertyControl({ label, value, hex, bar, onDec, onInc }) {
+function PropertyControl({ label, value, hex, bar, onDec, onInc, mode = "scale" }) {
+  if (mode === "binary") {
+    // Binary mode: value is either 1 (NO) or 10 (YES)
+    const isYes = value === 10;
+    
+    return (
+      <div className="rounded-xl p-2.5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <p className="text-[9px] font-black tracking-widest mb-2" style={{ color: hex }}>{label}</p>
+        <button 
+          onClick={() => {
+            if (isYes) {
+              // Switch from YES (10) to NO (1)
+              onDec(); // This will decrease to 1
+            } else {
+              // Switch from NO (1) to YES (10)
+              onInc(); // This will increase to 10
+            }
+          }}
+          className="w-full py-2 rounded-lg text-xs font-black transition-all"
+          style={{
+            background: isYes ? "rgba(74,222,128,0.2)" : "rgba(255,255,255,0.06)",
+            border: `1px solid ${isYes ? "#4ade80" : "rgba(255,255,255,0.1)"}`,
+            color: isYes ? "#4ade80" : "#94a3b8"
+          }}
+        >
+          {isYes ? "✓ YES" : "○ NO"}
+        </button>
+      </div>
+    );
+  }
+  
+  // Original scale UI (unchanged)
   return (
     <div className="rounded-xl p-2.5 flex flex-col gap-2"
       style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
