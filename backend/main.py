@@ -1,7 +1,7 @@
 """
 AI Task Sorter — FastAPI Backend
 =================================
-Run:  uvicorn main:app --reload --port 8000
+Run:  uvicorn backend.main:app --reload --port 8000
 """
 
 import asyncio
@@ -10,6 +10,7 @@ import os
 import uuid
 import httpx
 import re
+from pathlib import Path
 
 from datetime                   import date, timedelta
 from typing                     import Any, Dict, List, Optional
@@ -38,7 +39,14 @@ app.add_middleware(
 #  Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-TASKS_FILE: str = "tasks.json"
+# Get the directory where this file is located
+BACKEND_DIR = Path(__file__).parent
+PROJECT_ROOT = BACKEND_DIR.parent
+
+# Use paths relative to project root
+TASKS_FILE: str = str(PROJECT_ROOT / "tasks.json")
+MODEL_CONFIG_FILE: str = str(PROJECT_ROOT / "model_config.json")
+
 OPENROUTER_URL: str = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY")
 MODEL: str = os.getenv("MODEL")
@@ -516,8 +524,6 @@ def health() -> Dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  Model Configuration Routes
 # ─────────────────────────────────────────────────────────────────────────────
-
-MODEL_CONFIG_FILE: str = "model_config.json"
 
 def load_model_config() -> str:
     """Load the saved model from config file, fallback to env var or default"""
