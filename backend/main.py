@@ -21,10 +21,6 @@ from dotenv                     import load_dotenv
 
 load_dotenv()
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  App Setup
-# ─────────────────────────────────────────────────────────────────────────────
-
 app = FastAPI(title="AI Task Sorter", version="1.2.0")
 
 app.add_middleware(
@@ -36,8 +32,7 @@ app.add_middleware(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Config
-# ─────────────────────────────────────────────────────────────────────────────
+#region Constants
 
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
@@ -66,22 +61,19 @@ DEFAULT_PROPERTY_MODES: Dict[str, str] = {
 # Time presets in minutes
 TIME_PRESETS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 480, 960, 1440]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Pydantic Schemas
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+#region Pydantic Schemas
 class TaskCreate(BaseModel):
     Name: str
     Context: str = ""
-
 class TaskBulkItem(BaseModel):
     Name: str
     Context: str = ""
-
 class TaskBulkCreate(BaseModel):
     tasks: List[TaskBulkItem]
-
 class TaskUpdate(BaseModel):
     Name: Optional[str] = None
     Context: Optional[str] = None
@@ -93,28 +85,23 @@ class TaskUpdate(BaseModel):
     Urgency: Optional[int] = Field(None, ge=1, le=10)
     Importance: Optional[int] = Field(None, ge=1, le=10)
     Status: Optional[str] = None
-
 class SortRequest(BaseModel):
     tasks: List[Dict[str, Any]]
-
 class PostponeRequest(BaseModel):
     reason: str = ""
-
 class SubtaskAdd(BaseModel):
     name: str
-
 class SubtaskToggle(BaseModel):
     done: bool
-
 class ModelConfig(BaseModel):
     model: str
-
 class PropertyModeConfig(BaseModel):
     property_modes: Dict[str, Literal["scale", "binary"]]
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  File I/O
-# ─────────────────────────────────────────────────────────────────────────────
+#region File I/O
 
 def load_tasks() -> List[Dict]:
     if not os.path.exists(TASKS_FILE):
@@ -154,9 +141,11 @@ def save_config(config: Dict) -> None:
     with open(config_path, "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2, ensure_ascii=False)
 
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
-#  Utility Functions
+
 # ─────────────────────────────────────────────────────────────────────────────
+#region Utility Functions
 
 def _normalize_time_for_sorting(time_minutes: int) -> float:
     """Convert minutes to a normalized value for sorting (lower time = higher priority in tiebreaker)"""
@@ -201,9 +190,11 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
                 return json.dumps(reconstructed)
     return None
 
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
-#  Migration: Convert old Time_Estimate to Time_Minutes
+
 # ─────────────────────────────────────────────────────────────────────────────
+#region Migration Convert old Time_Estimate to Time_Minutes
 
 def _migrate_time_estimate_to_minutes(tasks: List[Dict]) -> List[Dict]:
     migration_map = {
@@ -223,9 +214,11 @@ def _migrate_time_estimate_to_minutes(tasks: List[Dict]) -> List[Dict]:
         save_tasks(tasks)
     return tasks
 
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
-#  Postpone reactivation
+
 # ─────────────────────────────────────────────────────────────────────────────
+#region Postpone reactivation
 
 async def _reactivate_due_postponed(tasks: List[Dict]) -> List[Dict]:
     today = date.today().isoformat()
@@ -254,10 +247,11 @@ async def _reactivate_due_postponed(tasks: List[Dict]) -> List[Dict]:
     save_tasks(updated)
     return updated
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  OpenRouter helpers
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+#region OpenRouter helpers
 def _or_headers() -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -379,10 +373,11 @@ async def _score_task(name: str, context: str) -> Dict[str, Any]:
 
     result["Time_Minutes"] = clamp_minutes(metrics.get("Time_Minutes"))
     return result
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Model Configuration Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+#region Model Configuration Helpers
 
 def load_model_config() -> str:
     if os.path.exists(MODEL_CONFIG_FILE):
@@ -397,10 +392,14 @@ def load_model_config() -> str:
 def save_model_config(model: str) -> None:
     with open(MODEL_CONFIG_FILE, "w", encoding="utf-8") as fh:
         json.dump({"model": model}, fh, indent=2)
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Routes — Config
+#region Routes
+
 # ─────────────────────────────────────────────────────────────────────────────
+#region config
 
 @app.get("/config/properties")
 def get_property_modes() -> Dict:
@@ -435,9 +434,12 @@ def set_model(config: ModelConfig) -> Dict:
     save_model_config(config.model)
     return {"message": "Model updated", "model": config.model}
 
+#endregion
 # ─────────────────────────────────────────────────────────────────────────────
-#  Routes — tasks
+
+
 # ─────────────────────────────────────────────────────────────────────────────
+#region tasks
 
 @app.get("/tasks")
 async def get_tasks() -> List[Dict]:
@@ -651,10 +653,11 @@ def delete_task(task_id: str) -> Dict:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
     save_tasks(filtered)
     return {"message": "Task deleted", "Task_ID": task_id}
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Routes — subtasks
-# ─────────────────────────────────────────────────────────────────────────────
+#region subtasks
 
 @app.post("/tasks/{task_id}/subtasks/suggest")
 async def suggest_subtasks(task_id: str) -> Dict:
@@ -733,6 +736,12 @@ def delete_subtask(task_id: str, subtask_id: str) -> Dict:
             return {"message": "Subtask deleted"}
     raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
 
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+#region misc
+
 @app.get("/health")
 def health() -> Dict:
     return {
@@ -756,3 +765,9 @@ def debug_file():
         "file_content_preview": content[:500] if content else None,
         "current_working_directory": os.getcwd(),
     }
+
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
+
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
