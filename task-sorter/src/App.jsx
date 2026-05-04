@@ -9,8 +9,8 @@ const PROPERTIES = [
   { key: "Importance",    label: "IMPORTANCE", hex: "#facc15", bar: "#eab308" },
   { key: "Relevance",     label: "RELEVANCE",  hex: "#34d399", bar: "#10b981" },
   { key: "Difficulty",    label: "DIFFICULTY", hex: "#c084fc", bar: "#a855f7" },
-  { key: "Time_Minutes",  label: "TIME (min)", hex: "#60a5fa", bar: "#3b82f6" },
   { key: "Hierarchy",     label: "HIERARCHY",  hex: "#f472b6", bar: "#ec4899" },
+  { key: "Time_Minutes",  label: "TIME (min)", hex: "#60a5fa", bar: "#3b82f6" },
 ];
 
 const PREVIEW_PROPS = ["Urgency", "Importance", "Priority"];
@@ -40,7 +40,7 @@ function parseBulkText(text) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Root App
+//region Root App
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -67,7 +67,6 @@ export default function App() {
   const [showAIPlanModal, setShowAIPlanModal] = useState(false);
   const [aiPlanResult, setAIPlanResult]       = useState(null);
   const [aiPlanPhase, setAiPlanPhase]         = useState("idle");
-  // FIX 3: error state for AI Plan
   const [aiPlanError, setAiPlanError]         = useState("");
 
   useEffect(() => {
@@ -130,7 +129,6 @@ export default function App() {
 
   const hasUnsavedEdits = Object.keys(localEdits).length > 0;
 
-  // FIX 2: adjustProp now honours a presetValue for binary toggles
   const adjustProp = useCallback((taskId, key, delta, presetValue = null) => {
     setLocalEdits((prev) => {
       const existing = prev[taskId] ?? {};
@@ -256,7 +254,6 @@ export default function App() {
     }
   };
 
-  // FIX 3: proper error handling + visible error state
   const handleAIPlan = async () => {
     const mergedTasks = tasks.map(merged);
     setAiPlanPhase("loading");
@@ -406,7 +403,6 @@ export default function App() {
                 </p>
               </div>
 
-              {/* FIX 2: Scoring modes — binary listed first and styled as the default */}
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-3">
                   <label className="text-[10px] font-black tracking-widest text-gray-600 uppercase">
@@ -704,7 +700,6 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              {/* FIX 3: show AI plan error inline */}
               {aiPlanError && (
                 <p className="text-red-400 text-xs">⚠ {aiPlanError}</p>
               )}
@@ -788,6 +783,8 @@ export default function App() {
   );
 }
 
+//endregion
+
 function formatMinutes(minutes) {
   if (minutes < 60)   return `${minutes}min`;
   if (minutes === 60) return "1h";
@@ -796,8 +793,7 @@ function formatMinutes(minutes) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TaskTable
-// ─────────────────────────────────────────────────────────────────────────────
+//region TaskTable
 
 function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
   const [expandedTask, setExpandedTask] = useState(null);
@@ -826,8 +822,8 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortD
             <TableHeader column="Importance"  label="Imp" />
             <TableHeader column="Relevance"   label="Rel" />
             <TableHeader column="Difficulty"  label="Diff" />
-            <TableHeader column="Time_Minutes" label="Time" />
             <TableHeader column="Hierarchy"   label="Hier" />
+            <TableHeader column="Time_Minutes" label="Time" />
             <th className="px-4 py-3 w-24" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
           </tr>
         </thead>
@@ -856,13 +852,15 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortD
   );
 }
 
+//endregion
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  TaskTableRow
 // ─────────────────────────────────────────────────────────────────────────────
 
 function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
 
-  // FIX 2: binary toggle uses -9/+9 deltas to go 1↔10
   const PropertyCell = ({ propKey }) => {
     const value = getVal(task, propKey);
     const prop  = PROPERTIES.find(p => p.key === propKey);
@@ -918,11 +916,6 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpand
 
   return (
     <>
-      {/*
-        FIX 1: onClick is NOT on the <tr> anymore.
-        Only the rank cell (#) and name cell trigger expand.
-        Property cells have e.stopPropagation() so they never bubble up.
-      */}
       <tr className="border-t border-white/5 hover:bg-white/[0.03] transition-colors">
         {/* Rank — clickable to expand */}
         <td className="px-4 py-3 text-center text-xs text-gray-600 cursor-pointer select-none" onClick={onToggleExpand}>
@@ -949,8 +942,8 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpand
         <PropertyCell propKey="Importance"  />
         <PropertyCell propKey="Relevance"   />
         <PropertyCell propKey="Difficulty"  />
-        <PropertyCell propKey="Time_Minutes" />
         <PropertyCell propKey="Hierarchy"   />
+        <PropertyCell propKey="Time_Minutes" />
 
         {/* Action buttons */}
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1131,7 +1124,6 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
                   mode={propertyModes[key]}
                   onDec={() => adjustProp(task.Task_ID, key, -1)}
                   onInc={() => adjustProp(task.Task_ID, key, 1)}
-                  // FIX 2: onSet for direct binary toggling
                   onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
                 />
               ))}
@@ -1281,10 +1273,6 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PropertyControl — FIX 2: binary uses onSet for proper 1↔10 toggling
-// ─────────────────────────────────────────────────────────────────────────────
-
 function PropertyControl({ label, value, hex, bar, propKey, onDec, onInc, onSet, mode = "binary" }) {
   if (propKey === "Time_Minutes") {
     // Time always renders as scale with ±
@@ -1313,7 +1301,6 @@ function PropertyControl({ label, value, hex, bar, propKey, onDec, onInc, onSet,
       <div className="rounded-xl p-2.5"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <p className="text-[9px] font-black tracking-widest mb-2" style={{ color: hex }}>{label}</p>
-        {/* FIX 2: use onSet to jump directly to 1 or 10 */}
         <button
           onClick={() => onSet(isYes ? 1 : 10)}
           className="w-full py-2 rounded-lg text-xs font-black transition-all"
