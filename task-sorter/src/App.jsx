@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+// task-sorter/src/App.jsx
+
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
 
 const API = "http://localhost:8000";
@@ -13,7 +15,7 @@ const PROPERTIES = [
   { key: "Time_Minutes",  label: "TIME (min)", hex: "#60a5fa", bar: "#3b82f6" },
 ];
 
-const PREVIEW_PROPS = ["Urgency", "Importance", "Priority"];
+const PREVIEW_PROPS = ["Urgency", "Importance", "Priority", "Relevance", "Difficulty", "Hierarchy", "Time_Minutes"];
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
@@ -69,9 +71,19 @@ export default function App() {
   const [aiPlanPhase, setAiPlanPhase]         = useState("idle");
   const [aiPlanError, setAiPlanError]         = useState("");
 
+  const [propertyOrder, setPropertyOrder] = useState(PROPERTIES.map(p => p.key));
+
   useEffect(() => {
     apiFetch("/config/properties").then(data => {
       setPropertyModes(data.property_modes);
+    }).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    apiFetch("/config/property-order").then(data => {
+      if (data.property_order?.length === PROPERTIES.length) {
+        setPropertyOrder(data.property_order);
+      }
     }).catch(console.error);
   }, []);
 
@@ -126,6 +138,12 @@ export default function App() {
     (task) => ({ ...task, ...(localEdits[task.Task_ID] ?? {}) }),
     [localEdits]
   );
+
+  const orderedProperties = useCallback(() => {
+    return propertyOrder
+      .map(key => PROPERTIES.find(p => p.key === key))
+      .filter(Boolean);
+  }, [propertyOrder]);
 
   const hasUnsavedEdits = Object.keys(localEdits).length > 0;
 
@@ -406,46 +424,40 @@ export default function App() {
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-3">
                   <label className="text-[10px] font-black tracking-widest text-gray-600 uppercase">
-                    Scoring Modes
+                    Scoring Modes & Order
                   </label>
                   <span className="text-[9px] px-2 py-0.5 rounded-full font-black"
                     style={{ background: "rgba(167,139,250,0.15)", color: "#a78bfa", border: "1px solid rgba(167,139,250,0.3)" }}>
-                    Binary = default
+                    Binary = default · Drag to reorder
                   </span>
                 </div>
-                <div className="space-y-2">
-                  {Object.keys(propertyModes).map(prop => {
-                    if (prop === "Time_Minutes") return null;
-                    return (
-                      <div key={prop} className="flex items-center justify-between py-2 border-b border-white/5">
-                        <span className="text-xs text-gray-300">{prop}</span>
-                        <div className="flex gap-2">
-                          {/* Binary first — it's the default */}
-                          <button
-                            onClick={() => setPropertyModes(prev => ({ ...prev, [prop]: "binary" }))}
-                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
-                              propertyModes[prop] === "binary"
-                                ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
-                                : "text-gray-600 hover:text-gray-400 border border-transparent"
-                            }`}>
-                            Binary ✓/✗
-                          </button>
-                          <button
-                            onClick={() => setPropertyModes(prev => ({ ...prev, [prop]: "scale" }))}
-                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
-                              propertyModes[prop] === "scale"
-                                ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
-                                : "text-gray-600 hover:text-gray-400 border border-transparent"
-                            }`}>
-                            Scale 1-10
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <DndProvider>
+                  <ReorderablePropertyList
+                    propertyOrder={propertyOrder}
+                    propertyModes={propertyModes}
+                    onReorder={setPropertyOrder}
+                    onModeChange={(prop, mode) => setPropertyModes(prev => ({ ...prev, [prop]: mode }))}
+                  />
+                </DndProvider>
                 <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                  onClick={handleSaveModes} disabled={modeSavePhase === "loading"}
+                  onClick={async () => {
+                    // Save both property modes and order
+                    setModeSavePhase("loading");
+                    try {
+                      await apiFetch("/config/properties", {
+                        method: "POST",
+                        body: JSON.stringify({ property_modes: propertyModes }),
+                      });
+                      await apiFetch("/config/property-order", {
+                        method: "POST",
+                        body: JSON.stringify({ property_order: propertyOrder }),
+                      });
+                      setModeSavePhase("idle");
+                    } catch (e) {
+                      setModeSavePhase("error");
+                    }
+                  }}
+                  disabled={modeSavePhase === "loading"}
                   className="w-full mt-4 py-2 rounded-xl font-black text-xs tracking-widest disabled:opacity-40"
                   style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>
                   {modeSavePhase === "loading" ? "SAVING…" : "💾 SAVE MODES"}
@@ -703,18 +715,24 @@ export default function App() {
               {aiPlanError && (
                 <p className="text-red-400 text-xs">⚠ {aiPlanError}</p>
               )}
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
+
+              {/* #tag AI Plan Button */}
+              {/* <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
                 onClick={handleAIPlan} disabled={aiPlanPhase === "loading"}
                 className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
                 style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
                 {aiPlanPhase === "loading" ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span> : "🤖 AI PLAN"}
-              </motion.button>
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
+              </motion.button> */}
+
+              {/* #tag Re-evaluate Button */}
+              {/* <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
                 disabled={isRevaluating}
                 className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
                 style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
                 {isRevaluating ? <span className="flex items-center gap-2"><Spinner /> EVALUATING…</span> : "↺ RE-EVALUATE"}
-              </motion.button>
+              </motion.button> */}
+
+              {/* #tag Sort Button */}
               {tasks.length > 1 && (
                 <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleSort}
                   className="px-8 py-2.5 rounded-xl font-black text-sm tracking-[0.2em] uppercase"
@@ -742,6 +760,7 @@ export default function App() {
                   getVal={getVal}
                   adjustProp={adjustProp}
                   propertyModes={propertyModes}
+                  propertyOrder={propertyOrder} 
                   onComplete={handleComplete}
                   onDelete={handleDelete}
                   onPostpone={openPostpone}
@@ -759,6 +778,7 @@ export default function App() {
             getVal={getVal}
             adjustProp={adjustProp}
             propertyModes={propertyModes}
+            propertyOrder={propertyOrder}
             sortColumn={sortColumn}
             sortDirection={sortDirection}
             onSort={handleSortColumn}
@@ -795,7 +815,7 @@ function formatMinutes(minutes) {
 // ─────────────────────────────────────────────────────────────────────────────
 //region TaskTable
 
-function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
   const [expandedTask, setExpandedTask] = useState(null);
 
   const SortIcon = ({ column }) => {
@@ -817,13 +837,21 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortD
           <tr>
             <th className="w-10 px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
             <TableHeader column="Name" label="Task" />
-            <TableHeader column="Priority"    label="Prio" />
-            <TableHeader column="Urgency"     label="Urg" />
-            <TableHeader column="Importance"  label="Imp" />
-            <TableHeader column="Relevance"   label="Rel" />
-            <TableHeader column="Difficulty"  label="Diff" />
-            <TableHeader column="Hierarchy"   label="Hier" />
-            <TableHeader column="Time_Minutes" label="Time" />
+            {(propertyOrder || PROPERTIES.map(p => p.key)).map(key => {
+              const prop = PROPERTIES.find(p => p.key === key);
+              if (!prop) return null;
+              // Shorten labels for table
+              const shortLabels = {
+                "Priority": "Prio", 
+                "Urgency": "Urg", 
+                "Importance": "Imp",
+                "Relevance": "Rel", 
+                "Difficulty": "Diff", 
+                "Hierarchy": "Hie",
+                "Time_Minutes": "Time"
+              };
+              return <TableHeader key={key} column={key} label={shortLabels[key] || prop.label} />;
+            })}
             <th className="px-4 py-3 w-24" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
           </tr>
         </thead>
@@ -836,6 +864,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortD
               getVal={getVal}
               adjustProp={adjustProp}
               propertyModes={propertyModes}
+              propertyOrder={propertyOrder}
               isExpanded={expandedTask === task.Task_ID}
               onToggleExpand={() => setExpandedTask(expandedTask === task.Task_ID ? null : task.Task_ID)}
               onComplete={onComplete}
@@ -859,7 +888,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, sortColumn, sortD
 //  TaskTableRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, propertyOrder, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
 
   const PropertyCell = ({ propKey }) => {
     const value = getVal(task, propKey);
@@ -937,13 +966,12 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, isExpand
         </td>
 
         {/* Property cells — all stop propagation internally */}
-        <PropertyCell propKey="Priority"    />
-        <PropertyCell propKey="Urgency"     />
-        <PropertyCell propKey="Importance"  />
-        <PropertyCell propKey="Relevance"   />
-        <PropertyCell propKey="Difficulty"  />
-        <PropertyCell propKey="Hierarchy"   />
-        <PropertyCell propKey="Time_Minutes" />
+        {(propertyOrder || PROPERTIES.map(p => p.key))
+        .map(key => PROPERTIES.find(p => p.key === key))
+        .filter(Boolean)
+        .map(({ key }) => (
+          <PropertyCell key={key} propKey={key} />
+        ))}
 
         {/* Action buttons */}
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1041,7 +1069,7 @@ function SubtaskAddInline({ taskId, onAdded }) {
 //  TaskCard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
+function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder,onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
   const [expanded, setExpanded] = useState(false);
   const spring = { type: "spring", stiffness: 380, damping: 38 };
 
@@ -1059,14 +1087,16 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
       className="mb-3 rounded-2xl overflow-hidden"
       style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${heatColor}` }}>
 
-      <div className="flex items-center gap-3 px-4 py-3.5">
+      <div className="flex items-center gap-3 px-4 py-3.5 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
         <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
           style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
-        <motion.button whileTap={{ scale: 0.7 }} onClick={() => onComplete(task.Task_ID)} title="Mark complete"
+        
+        <motion.button whileTap={{ scale: 0.7 }} onClick={(e) => { e.stopPropagation(); onComplete(task.Task_ID); }} title="Mark complete"
           className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
           style={{ borderColor: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4ade80")}
           onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#334155")} />
+        
         <div className="flex-1 min-w-0">
           <p className="text-white text-sm font-bold leading-snug truncate">{task.Name}</p>
           {task.Context && <p className="text-gray-600 text-xs mt-0.5 truncate">{task.Context}</p>}
@@ -1080,6 +1110,7 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
             </div>
           )}
         </div>
+        
         <div className="flex items-end gap-1 h-7 flex-shrink-0">
           {PREVIEW_PROPS.map((key) => {
             const prop = PROPERTIES.find((p) => p.key === key);
@@ -1091,17 +1122,21 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
             );
           })}
         </div>
+        
         <span className="text-[10px] font-black px-2 py-0.5 rounded-lg flex-shrink-0"
           style={{ background: `${heatColor}22`, color: heatColor }}>{heat * 10}%</span>
-        <button onClick={() => onPostpone(task)} title="Postpone until tomorrow"
+        
+        <button onClick={(e) => { e.stopPropagation(); onPostpone(task); }} title="Postpone until tomorrow"
           className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
-        <motion.button onClick={() => setExpanded((v) => !v)}
+        
+        <motion.span
           animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}
           className="flex-shrink-0 text-xs transition-colors"
-          style={{ color: expanded ? "#22d3ee" : "#475569" }}>▼</motion.button>
-        <button onClick={() => onDelete(task.Task_ID)} title="Delete"
+          style={{ color: expanded ? "#22d3ee" : "#475569" }}>▼</motion.span>
+        
+        <button onClick={(e) => { e.stopPropagation(); onDelete(task.Task_ID); }} title="Delete"
           className="flex-shrink-0 text-xs transition-colors ml-1" style={{ color: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✕</button>
@@ -1113,20 +1148,23 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: "easeInOut" }}
             className="overflow-hidden" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
             <div className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {PROPERTIES.map(({ key, label, hex, bar }) => (
-                <PropertyControl
-                  key={key}
-                  label={label}
-                  value={getVal(task, key)}
-                  hex={hex}
-                  bar={bar}
-                  propKey={key}
-                  mode={propertyModes[key]}
-                  onDec={() => adjustProp(task.Task_ID, key, -1)}
-                  onInc={() => adjustProp(task.Task_ID, key, 1)}
-                  onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
-                />
-              ))}
+              {(propertyOrder || PROPERTIES.map(p => p.key))
+                .map(key => PROPERTIES.find(p => p.key === key))
+                .filter(Boolean)
+                .map(({ key, label, hex, bar }) => (
+                  <PropertyControl
+                    key={key}
+                    label={label}
+                    value={getVal(task, key)}
+                    hex={hex}
+                    bar={bar}
+                    propKey={key}
+                    mode={propertyModes[key]}
+                    onDec={() => adjustProp(task.Task_ID, key, -1)}
+                    onInc={() => adjustProp(task.Task_ID, key, 1)}
+                    onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
+                  />
+                ))}
             </div>
             {task.Context && (
               <div className="mx-4 mb-4 px-3 py-2 rounded-lg text-xs text-gray-500"
@@ -1146,7 +1184,7 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, on
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SubtaskSection (unchanged)
+//  SubtaskSection
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
@@ -1342,7 +1380,215 @@ function PropertyControl({ label, value, hex, bar, propKey, onDec, onInc, onSet,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Utility components (unchanged)
+//  Drag and Drop for Property Reordering
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DndContext = createContext(null);
+
+function DndProvider({ children }) {
+  const [dragState, setDragState] = useState(null);
+
+  const value = { dragState, setDragState };
+  return <DndContext.Provider value={value}>{children}</DndContext.Provider>;
+}
+
+function useDnd() {
+  const ctx = useContext(DndContext);
+  if (!ctx) throw new Error('useDnd must be used within DndProvider');
+  return ctx;
+}
+
+function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onModeChange }) {
+  const { dragState, setDragState } = useDnd();
+  const listRef = useRef(null);
+  const dragIndex = useRef(null);
+
+  const handlePointerDown = (index, e) => {
+    // Only start drag from the handle
+    if (!e.target.closest('[data-drag-handle]')) return;
+    e.preventDefault();
+    dragIndex.current = index;
+    setDragState({ fromIndex: index, active: true });
+  };
+
+  useEffect(() => {
+    if (!dragState?.active) return;
+
+    const handlePointerMove = (e) => {
+      // Highlight the drop zone under the cursor
+      const elements = listRef.current?.querySelectorAll('[data-drop-zone]');
+      if (!elements) return;
+      elements.forEach(el => {
+        const rect = el.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          el.style.outline = e.clientY < midY 
+            ? '2px solid rgba(6,182,212,0.5)' 
+            : '2px solid rgba(168,85,247,0.5)';
+          el.style.outlineOffset = '-2px';
+        } else {
+          el.style.outline = '';
+          el.style.outlineOffset = '';
+        }
+      });
+    };
+
+    const handlePointerUp = (e) => {
+      if (dragIndex.current === null) return;
+
+      // Find which drop zone we're over
+      const elements = listRef.current?.querySelectorAll('[data-drop-zone]');
+      if (!elements) return;
+
+      let targetIndex = dragIndex.current; // default: no move
+
+      // Determine target index based on cursor position
+      const dropZones = Array.from(elements).map((el, idx) => ({
+        el,
+        idx,
+        rect: el.getBoundingClientRect(),
+      }));
+
+      // Find the closest drop zone to the cursor
+      for (const { el, idx, rect } of dropZones) {
+        if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          const midY = rect.top + rect.height / 2;
+          // If dropping on the bottom half, target the next position
+          targetIndex = e.clientY < midY ? idx : idx + 1;
+          break;
+        }
+      }
+
+      // Clean up highlights
+      elements.forEach(el => {
+        el.style.outline = '';
+        el.style.outlineOffset = '';
+      });
+
+      // Perform the reorder
+      if (targetIndex !== dragIndex.current) {
+        const fromIndex = dragIndex.current;
+        const newOrder = [...propertyOrder];
+
+        // Remove from original position
+        const [moved] = newOrder.splice(fromIndex, 1);
+        
+        // Adjust target if we removed before it
+        const adjustedTarget = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        newOrder.splice(adjustedTarget, 0, moved);
+        
+        onReorder(newOrder);
+      }
+
+      dragIndex.current = null;
+      setDragState(null);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [dragState, propertyOrder, onReorder]);
+
+  const orderedKeys = propertyOrder.filter(k => k !== "Time_Minutes");
+
+  return (
+    <div ref={listRef} className="space-y-1">
+      {orderedKeys.map((propKey, index) => {
+        const prop = PROPERTIES.find(p => p.key === propKey);
+        const mode = propertyModes[propKey] || "binary";
+        const isDragging = dragState?.fromIndex === index;
+
+        return (
+          <div
+            key={propKey}
+            data-drop-zone
+            className="flex items-center gap-3 py-2.5 px-3 rounded-lg transition-all"
+            style={{
+              background: isDragging ? "rgba(6,182,212,0.08)" : "rgba(255,255,255,0.02)",
+              border: `1px solid ${isDragging ? "rgba(6,182,212,0.3)" : "rgba(255,255,255,0.06)"}`,
+              userSelect: 'none',
+              touchAction: 'none',
+              opacity: isDragging ? 0.6 : 1,
+              transform: isDragging ? 'scale(1.02)' : 'scale(1)',
+            }}
+            onPointerDown={(e) => handlePointerDown(index, e)}
+          >
+            {/* Drag handle */}
+            <span
+              data-drag-handle
+              className="text-gray-600 hover:text-gray-400 text-sm cursor-grab active:cursor-grabbing px-1 select-none"
+              title="Drag to reorder"
+              style={{ touchAction: 'none' }}
+            >
+              ⠿
+            </span>
+
+            {/* Color indicator */}
+            <span
+              className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+              style={{ background: prop?.hex || '#666' }}
+            />
+
+            {/* Property name */}
+            <span className="text-xs text-gray-300 flex-1 font-medium">{prop?.label || propKey}</span>
+
+            {/* Mode buttons */}
+            <div className="flex gap-1.5 flex-shrink-0">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onModeChange(propKey, "binary");
+                }}
+                className={`px-2.5 py-1 rounded-md text-[9px] font-black transition-all ${
+                  mode === "binary"
+                    ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
+                    : "text-gray-600 hover:text-gray-400 border border-transparent"
+                }`}>
+                ✓/✗
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onModeChange(propKey, "scale");
+                }}
+                className={`px-2.5 py-1 rounded-md text-[9px] font-black transition-all ${
+                  mode === "scale"
+                    ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
+                    : "text-gray-600 hover:text-gray-400 border border-transparent"
+                }`}>
+                1-10
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Time_Minutes always at bottom */}
+      <div
+        className="flex items-center gap-3 py-2.5 px-3 rounded-lg opacity-60"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: "1px solid rgba(255,255,255,0.06)",
+        }}
+      >
+        <span className="text-gray-700 text-sm px-1">⠿</span>
+        <span
+          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+          style={{ background: "#60a5fa" }}
+        />
+        <span className="text-xs text-gray-500 flex-1 font-medium">TIME (min)</span>
+        <span className="text-[9px] text-gray-600 px-2">always scale</span>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Utility components
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DarkInput({ value, onChange, onEnter, placeholder, disabled, className = "" }) {

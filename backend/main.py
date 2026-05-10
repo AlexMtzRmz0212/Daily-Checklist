@@ -47,16 +47,25 @@ MODEL: str = os.getenv("MODEL")
 SITE_URL: str = "http://localhost:5173"
 SITE_NAME: str = "AI Task Sorter"
 
-# FIX 2: Binary is now the default for all properties except Time_Minutes
 DEFAULT_PROPERTY_MODES: Dict[str, str] = {
     "Priority":    "binary",
     "Hierarchy":   "binary",
-    "Time_Minutes": "scale",   # always scale (in minutes)
+    "Time_Minutes": "scale",
     "Difficulty":  "binary",
     "Relevance":   "binary",
     "Urgency":     "binary",
     "Importance":  "binary",
 }
+
+DEFAULT_PROPERTY_ORDER: List[str] = [ 
+    "Urgency", 
+    "Importance", 
+    "Relevance",
+    "Difficulty", 
+    "Priority", 
+    "Hierarchy", 
+    "Time_Minutes"
+]
 
 # Time presets in minutes
 TIME_PRESETS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 480, 960, 1440]
@@ -97,6 +106,8 @@ class ModelConfig(BaseModel):
     model: str
 class PropertyModeConfig(BaseModel):
     property_modes: Dict[str, Literal["scale", "binary"]]
+class PropertyOrderConfig(BaseModel):
+    property_order: List[str]
 #endregion
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -118,101 +129,41 @@ def save_tasks(tasks: List[Dict]) -> None:
         json.dump(tasks, fh, indent=2, ensure_ascii=False)
 
 def load_config() -> Dict:
-    """Load app configuration (property modes, etc.)"""
+    """Load app configuration (property modes, order, etc.)"""
     config_path = str(BACKEND_DIR / CONFIG_FILE)
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as fh:
                 config = json.load(fh)
+                # Ensure property_modes exists
                 if "property_modes" not in config:
                     config["property_modes"] = DEFAULT_PROPERTY_MODES.copy()
                 else:
                     for prop, mode in DEFAULT_PROPERTY_MODES.items():
                         if prop not in config["property_modes"]:
                             config["property_modes"][prop] = mode
+                # Ensure property_order exists
+                if "property_order" not in config:
+                    config["property_order"] = DEFAULT_PROPERTY_ORDER.copy()
+                else:
+                    # Make sure all properties are in the order
+                    existing = set(config["property_order"])
+                    for prop in DEFAULT_PROPERTY_ORDER:
+                        if prop not in existing:
+                            config["property_order"].append(prop)
                 return config
         except (json.JSONDecodeError, KeyError):
             pass
-    return {"property_modes": DEFAULT_PROPERTY_MODES.copy()}
+    return {
+        "property_modes": DEFAULT_PROPERTY_MODES.copy(),
+        "property_order": DEFAULT_PROPERTY_ORDER.copy()
+    }
 
 def save_config(config: Dict) -> None:
     """Save app configuration"""
     config_path = str(BACKEND_DIR / CONFIG_FILE)
     with open(config_path, "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2, ensure_ascii=False)
-
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-#region Utility Functions
-
-def _normalize_time_for_sorting(time_minutes: int) -> float:
-    """Convert minutes to a normalized value for sorting (lower time = higher priority in tiebreaker)"""
-    if time_minutes <= 0:
-        return 0.1
-    return max(1, 10 - (time_minutes / 160))
-
-def _get_property_modes() -> Dict[str, str]:
-    """Get current property modes from config"""
-    config = load_config()
-    return config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
-
-def _attempt_fix_truncated_json(text: str) -> Optional[str]:
-    """Attempt to fix truncated JSON by adding missing closing braces/brackets"""
-    text = text.strip()
-    open_braces   = text.count('{')
-    close_braces  = text.count('}')
-    open_brackets  = text.count('[')
-    close_brackets = text.count(']')
-    if open_braces > close_braces:
-        text += '}' * (open_braces - close_braces)
-    if open_brackets > close_brackets:
-        text += ']' * (open_brackets - close_brackets)
-    text = re.sub(r',\s*\}', '}', text)
-    text = re.sub(r',\s*\]', ']', text)
-    try:
-        json.loads(text)
-        return text
-    except json.JSONDecodeError:
-        pairs = re.findall(r'"([^"]+)"\s*:\s*([0-9]+(?:\.?[0-9]*)?)', text)
-        if pairs:
-            reconstructed = {}
-            for key, value in pairs:
-                if key in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance", "Time_Minutes"]:
-                    reconstructed[key] = int(float(value))
-            if reconstructed:
-                for field in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
-                    if field not in reconstructed:
-                        reconstructed[field] = 1   # binary default: NO
-                if "Time_Minutes" not in reconstructed:
-                    reconstructed["Time_Minutes"] = 30
-                return json.dumps(reconstructed)
-    return None
-
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-#region Migration Convert old Time_Estimate to Time_Minutes
-
-def _migrate_time_estimate_to_minutes(tasks: List[Dict]) -> List[Dict]:
-    migration_map = {
-        1: 5, 2: 15, 3: 30, 4: 60, 5: 120,
-        6: 240, 7: 480, 8: 960, 9: 1440, 10: 2880,
-    }
-    migrated = False
-    for task in tasks:
-        if "Time_Estimate" in task and "Time_Minutes" not in task:
-            old_value = task.get("Time_Estimate")
-            task["Time_Minutes"] = migration_map.get(old_value, 60)
-            migrated = True
-    if migrated:
-        for task in tasks:
-            if "Time_Estimate" in task:
-                del task["Time_Estimate"]
-        save_tasks(tasks)
-    return tasks
 
 #endregion
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,16 +212,87 @@ def _or_headers() -> Dict[str, str]:
     }
 
 def _clean_json_fence(text: str) -> str:
+    """Extract the first balanced JSON object or array from model output."""
     text = (text or "").strip()
+
+    # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    match = re.search(r'[\{\[][\s\S]*[\}\]]', text)
-    if match:
-        return match.group(0)
+
+    # Walk the string character by character to find the first balanced { } or [ ]
+    opener, closer = None, None
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if opener is None:
+            if ch == '{':
+                opener, closer = '{', '}'
+            elif ch == '[':
+                opener, closer = '[', ']'
+            else:
+                continue
+            start = i
+            depth = 1
+        else:
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+    # Nothing balanced found; return as-is and let the caller deal with it
     return text
+
+def _attempt_fix_truncated_json(text: str) -> Optional[str]:
+    """Attempt to fix truncated or malformed JSON by closing open brackets,
+    stripping trailing commas, and reconstructing from whatever key/value
+    pairs can be salvaged — including boolean and text representations."""
+    text = text.strip()
+
+    # Close unclosed braces/brackets
+    text += '}' * max(0, text.count('{') - text.count('}'))
+    text += ']' * max(0, text.count('[') - text.count(']'))
+    text = re.sub(r',\s*\}', '}', text)
+    text = re.sub(r',\s*\]', ']', text)
+
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    BINARY_FIELDS = {"Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"}
+    ALL_FIELDS    = BINARY_FIELDS | {"Time_Minutes"}
+    reconstructed: Dict[str, int] = {}
+
+    # Numeric values  →  "Key": 42
+    for key, value in re.findall(r'"([^"]+)"\s*:\s*([0-9]+(?:\.[0-9]*)?)', text):
+        if key in ALL_FIELDS:
+            reconstructed[key] = int(float(value))
+
+    # JSON booleans  →  "Key": true / false
+    for key, value in re.findall(r'"([^"]+)"\s*:\s*(true|false)\b', text, re.IGNORECASE):
+        if key in BINARY_FIELDS and key not in reconstructed:
+            reconstructed[key] = 1 if value.lower() == "true" else 0
+
+    # Quoted text    →  "Key": "yes" / "no" / "Yes" / …
+    for key, value in re.findall(r'"([^"]+)"\s*:\s*"(yes|no|high|low|true|false)"', text, re.IGNORECASE):
+        if key in BINARY_FIELDS and key not in reconstructed:
+            reconstructed[key] = 1 if value.lower() in ("yes", "high", "true") else 0
+
+    if not reconstructed:
+        return None
+
+    # Fill in any missing fields with safe defaults (0 = NO for binary)
+    for field in BINARY_FIELDS:
+        reconstructed.setdefault(field, 0)
+    reconstructed.setdefault("Time_Minutes", 30)
+
+    return json.dumps(reconstructed)
 
 async def _call_openrouter(prompt: str, max_tokens: int = 1000, temperature: float = 0.2) -> str:
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -325,7 +347,12 @@ Return ONLY the JSON object. Start with {{ and end with }}. No trailing commas."
 
 async def _score_task(name: str, context: str) -> Dict[str, Any]:
     property_modes = _get_property_modes()
-    raw = await _call_openrouter(_build_score_prompt(name, context, property_modes), max_tokens=300, temperature=0.15)
+
+    _DEFAULTS: Dict[str, Any] = {
+        "Priority": 10, "Hierarchy": 10, "Difficulty": 10,
+        "Relevance": 10, "Urgency": 10, "Importance": 10,
+        "Time_Minutes": 60,
+    }
 
     def clamp(v: Any, default: int = 5) -> int:
         try:
@@ -342,37 +369,55 @@ async def _score_task(name: str, context: str) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return 30
 
-    cleaned = _clean_json_fence(raw)
+    metrics = _DEFAULTS.copy()
     try:
-        metrics = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        fixed_json = _attempt_fix_truncated_json(cleaned)
-        if fixed_json:
-            try:
-                metrics = json.loads(fixed_json)
-                print(f"Recovered truncated JSON for: {name}")
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=502, detail=f"AI returned unparseable JSON: {raw!r}") from exc
-        else:
-            print(f"Using defaults for: {name}")
-            metrics = {
-                "Priority": 1, "Hierarchy": 1, "Difficulty": 1,
-                "Relevance": 1, "Urgency": 1, "Importance": 1,
-                "Time_Minutes": 30,
-            }
+        raw     = await _call_openrouter(_build_score_prompt(name, context, property_modes), max_tokens=300, temperature=0.15)
+        cleaned = _clean_json_fence(raw)
+        try:
+            metrics = json.loads(cleaned)
+        except json.JSONDecodeError:
+            fixed_json = _attempt_fix_truncated_json(cleaned)
+            if fixed_json:
+                try:
+                    metrics = json.loads(fixed_json)
+                    print(f"Recovered JSON for '{name}'")
+                except json.JSONDecodeError:
+                    print(f"Unrecoverable JSON for '{name}' — using defaults. Raw: {raw!r}")
+                    metrics = _DEFAULTS.copy()
+            else:
+                print(f"No JSON found for '{name}' — using defaults. Raw: {raw!r}")
+                metrics = _DEFAULTS.copy()
+    except Exception as exc:  # network error, 502, timeout, etc.
+        print(f"AI scoring failed for '{name}' ({type(exc).__name__}: {exc}) — using defaults.")
 
     result = {}
     for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
         mode = property_modes.get(prop, "binary")
         if mode == "binary":
             value = metrics.get(prop, 0)
-            # AI returns 0/1; map to 1/10 internally
             result[prop] = 10 if int(value) >= 1 else 1
         else:
             result[prop] = clamp(metrics.get(prop))
 
     result["Time_Minutes"] = clamp_minutes(metrics.get("Time_Minutes"))
     return result
+#endregion
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+#region Utility Functions
+
+def _normalize_time_for_sorting(time_minutes: int) -> float:
+    """Convert minutes to a normalized value for sorting (lower time = higher priority in tiebreaker)"""
+    if time_minutes <= 0:
+        return 0.1
+    return max(1, 10 - (time_minutes / 160))
+
+def _get_property_modes() -> Dict[str, str]:
+    """Get current property modes from config"""
+    config = load_config()
+    return config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
+
 #endregion
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -406,7 +451,7 @@ def get_property_modes() -> Dict:
     config = load_config()
     return {
         "property_modes": config.get("property_modes", DEFAULT_PROPERTY_MODES),
-        "available_modes": ["binary", "scale"],   # binary listed first = preferred
+        "available_modes": ["binary", "scale"],
         "time_presets": TIME_PRESETS,
     }
 
@@ -424,6 +469,28 @@ def set_property_modes(config: PropertyModeConfig) -> Dict:
     app_config["property_modes"] = config.property_modes
     save_config(app_config)
     return {"message": "Property modes updated", "property_modes": app_config["property_modes"]}
+
+@app.get("/config/property-order")
+def get_property_order() -> Dict:
+    config = load_config()
+    return {"property_order": config.get("property_order", DEFAULT_PROPERTY_ORDER)}
+
+@app.post("/config/property-order")
+def set_property_order(config: PropertyOrderConfig) -> Dict:
+    valid_props = set(DEFAULT_PROPERTY_MODES.keys())
+    ordered = config.property_order
+    
+    # Validate all props are present
+    if set(ordered) != valid_props:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Property order must contain exactly: {sorted(valid_props)}"
+        )
+    
+    app_config = load_config()
+    app_config["property_order"] = ordered
+    save_config(app_config)
+    return {"message": "Property order updated", "property_order": ordered}
 
 @app.get("/config/model")
 def get_model() -> Dict:
@@ -444,15 +511,13 @@ def set_model(config: ModelConfig) -> Dict:
 @app.get("/tasks")
 async def get_tasks() -> List[Dict]:
     tasks = load_tasks()
-    tasks = _migrate_time_estimate_to_minutes(tasks)
     tasks = await _reactivate_due_postponed(tasks)
     save_tasks(tasks)
     return [t for t in tasks if t.get("Status") == "Active"]
 
 @app.get("/tasks/all")
 def get_all_tasks() -> List[Dict]:
-    tasks = load_tasks()
-    return _migrate_time_estimate_to_minutes(tasks)
+    return load_tasks()
 
 @app.post("/tasks/evaluate")
 async def evaluate_task(task: TaskCreate) -> Dict:
@@ -468,7 +533,6 @@ async def evaluate_task(task: TaskCreate) -> Dict:
         **metrics,
     }
     tasks = load_tasks()
-    tasks = _migrate_time_estimate_to_minutes(tasks)
     tasks.append(new_task)
     save_tasks(tasks)
     return new_task
@@ -489,7 +553,6 @@ async def evaluate_bulk(payload: TaskBulkCreate) -> List[Dict]:
         }
     new_tasks = list(await asyncio.gather(*[score_one(item) for item in payload.tasks]))
     all_tasks = load_tasks()
-    all_tasks = _migrate_time_estimate_to_minutes(all_tasks)
     all_tasks.extend(new_tasks)
     save_tasks(all_tasks)
     return new_tasks
@@ -497,7 +560,6 @@ async def evaluate_bulk(payload: TaskBulkCreate) -> List[Dict]:
 @app.post("/tasks/reevaluate-all")
 async def reevaluate_all() -> List[Dict]:
     all_tasks = load_tasks()
-    all_tasks = _migrate_time_estimate_to_minutes(all_tasks)
     active = [t for t in all_tasks if t.get("Status") == "Active"]
     if not active:
         return []
@@ -534,55 +596,51 @@ async def ai_action_plan(request: SortRequest) -> Dict:
     if not request.tasks:
         return {"sorted_ids": [], "plan_text": "No tasks to plan.", "reasoning": "", "method": "ai"}
 
-    # FIX 3: Concise task summary to stay well within token limits
+    full_ids = [t["Task_ID"] for t in request.tasks]
     tasks_summary = []
     for i, task in enumerate(request.tasks, 1):
-        urgency    = task.get("Urgency", 1)
-        importance = task.get("Importance", 1)
-        u_label    = "YES" if urgency    == 10 else "NO"
-        i_label    = "YES" if importance == 10 else "NO"
+        u_label = "YES" if task.get("Urgency", 1)    == 10 else "NO"
+        i_label = "YES" if task.get("Importance", 1) == 10 else "NO"
+        h_label = "YES" if task.get("Hierarchy", 1)  == 10 else "NO"
         tasks_summary.append(
-            f"{i}. [{task['Task_ID'][:8]}] {task['Name']}"
-            f" | Urgent:{u_label} Important:{i_label}"
+            f'{i}. ID:"{task["Task_ID"]}" | {task["Name"]}'
+            f" | Urgent:{u_label} Important:{i_label} Blocking:{h_label}"
             f" | Priority:{task.get('Priority',1)} Time:{task.get('Time_Minutes',30)}min"
-            f" | Difficulty:{task.get('Difficulty',1)} Relevance:{task.get('Relevance',1)}"
         )
 
-    prompt = f"""You are a productivity expert. Sort these tasks optimally and write a brief action plan.
+    # Put the JSON schema FIRST so reasoning models that run out of tokens
+    # still emit the structure before any prose explanation.
+    prompt = f"""Output ONLY a JSON object — no explanation, no markdown, no reasoning text.
 
-Tasks (ID prefix shown):
+Sort the tasks below by this priority order:
+1. Urgent+Important first
+2. Blocking (Hierarchy=YES) tasks next to unblock others
+3. High Priority tasks
+4. Shorter tasks as quick wins when priority is equal
+
+Tasks:
 {chr(10).join(tasks_summary)}
 
-Rules:
-- Urgent+Important tasks first
-- Quick wins (<30min) can be batched early to clear mental overhead
-- High difficulty tasks when energy is highest (earlier)
-- Dependencies (Hierarchy=YES) must be unblocked first
+Respond with exactly this JSON and nothing else:
+{{"sorted_task_ids":{json.dumps(full_ids)},"plan_text":"<2-3 sentence plan>","reasoning":"<1 sentence>"}}
 
-Return ONLY valid JSON, no markdown:
-{{
-  "sorted_task_ids": ["full-task-id-1", "full-task-id-2"],
-  "plan_text": "2-3 sentence action plan mentioning specific tasks",
-  "reasoning": "1 sentence on the sorting strategy"
-}}
+Replace the sorted_task_ids array with the IDs reordered by the rules above.
+Do not add any text before or after the JSON object."""
 
-IMPORTANT: sorted_task_ids must contain the FULL Task_ID (not the 8-char prefix).
-Full IDs: {json.dumps([t["Task_ID"] for t in request.tasks])}"""
-
+    raw = ""
     try:
-        raw = await _call_openrouter(prompt, max_tokens=800, temperature=0.3)
+        raw = await _call_openrouter(prompt, max_tokens=1200, temperature=0.1)
         cleaned = _clean_json_fence(raw)
         plan = json.loads(cleaned)
 
         if not isinstance(plan, dict) or "sorted_task_ids" not in plan:
-            raise ValueError(f"Missing sorted_task_ids in response: {raw!r}")
+            raise ValueError("Missing sorted_task_ids")
 
-        task_ids   = {t["Task_ID"] for t in request.tasks}
+        task_ids   = set(full_ids)
         sorted_ids = [tid for tid in plan["sorted_task_ids"] if tid in task_ids]
-
-        # Append any IDs the AI dropped
-        missing = [t["Task_ID"] for t in request.tasks if t["Task_ID"] not in set(sorted_ids)]
-        sorted_ids.extend(missing)
+        # Append any the AI dropped so the list is always complete
+        seen = set(sorted_ids)
+        sorted_ids.extend(tid for tid in full_ids if tid not in seen)
 
         return {
             "sorted_ids": sorted_ids,
@@ -591,16 +649,31 @@ Full IDs: {json.dumps([t["Task_ID"] for t in request.tasks])}"""
             "method":     "ai",
         }
 
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI returned an unparseable plan. Raw response: {raw!r}"
-        ) from exc
+    except (json.JSONDecodeError, ValueError):
+        # Graceful fallback: apply the same math sort the /tasks/sort endpoint uses
+        # rather than returning a 502 to the user.
+        print(f"AI plan parse failed — falling back to math sort. Raw: {raw!r}")
+
+        def sort_key(t: Dict) -> tuple:
+            return (
+                -(t.get("Urgency", 1) * t.get("Importance", 1)),
+                -t.get("Hierarchy", 1),
+                -t.get("Priority", 1),
+                _normalize_time_for_sorting(t.get("Time_Minutes", 30)),
+                -t.get("Relevance", 1),
+            )
+
+        sorted_tasks = sorted(request.tasks, key=sort_key)
+        return {
+            "sorted_ids": [t["Task_ID"] for t in sorted_tasks],
+            "plan_text":  "Sorted automatically by urgency, importance, and priority.",
+            "reasoning":  "AI plan could not be parsed; mathematical sort applied.",
+            "method":     "math_fallback",
+        }
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: str, update: TaskUpdate) -> Dict:
     tasks = load_tasks()
-    tasks = _migrate_time_estimate_to_minutes(tasks)
     for i, t in enumerate(tasks):
         if t["Task_ID"] == task_id:
             tasks[i].update(update.model_dump(exclude_none=True))
@@ -624,7 +697,7 @@ def postpone_task(task_id: str, body: PostponeRequest) -> Dict:
     tasks = load_tasks()
     for i, t in enumerate(tasks):
         if t["Task_ID"] == task_id:
-            tasks[i]["Status"]        = "Postponed"
+            tasks[i]["Status"]          = "Postponed"
             tasks[i]["Postponed_Until"] = tomorrow
             tasks[i]["Postpone_Reason"] = body.reason.strip()
             save_tasks(tasks)
@@ -634,7 +707,6 @@ def postpone_task(task_id: str, body: PostponeRequest) -> Dict:
 @app.post("/tasks/bulk-update")
 def bulk_update(updated_tasks: List[Dict[str, Any]] = Body(...)) -> Dict:
     all_tasks = load_tasks()
-    all_tasks = _migrate_time_estimate_to_minutes(all_tasks)
     task_map = {t["Task_ID"]: t for t in all_tasks}
     updated_count = 0
     for updated in updated_tasks:
