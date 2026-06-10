@@ -590,6 +590,7 @@ async def sort_tasks(request: SortRequest) -> Dict:
     sorted_tasks = sorted(request.tasks, key=sort_key)
     return {"sorted_ids": [t["Task_ID"] for t in sorted_tasks], "method": "mathematical"}
 
+#region AI-Plan
 @app.post("/tasks/ai-plan")
 async def ai_action_plan(request: SortRequest) -> Dict:
     """Use AI to create an optimal action plan."""
@@ -608,8 +609,6 @@ async def ai_action_plan(request: SortRequest) -> Dict:
             f" | Priority:{task.get('Priority',1)} Time:{task.get('Time_Minutes',30)}min"
         )
 
-    # Put the JSON schema FIRST so reasoning models that run out of tokens
-    # still emit the structure before any prose explanation.
     prompt = f"""Output ONLY a JSON object — no explanation, no markdown, no reasoning text.
 
 Sort the tasks below by this priority order:
@@ -670,6 +669,7 @@ Do not add any text before or after the JSON object."""
             "reasoning":  "AI plan could not be parsed; mathematical sort applied.",
             "method":     "math_fallback",
         }
+#endregion
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: str, update: TaskUpdate) -> Dict:
@@ -837,9 +837,6 @@ def debug_file():
         "file_content_preview": content[:500] if content else None,
         "current_working_directory": os.getcwd(),
     }
-
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 #endregion
 # ─────────────────────────────────────────────────────────────────────────────

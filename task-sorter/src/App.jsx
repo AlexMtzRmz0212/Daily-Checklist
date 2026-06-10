@@ -717,12 +717,12 @@ export default function App() {
               )}
 
               {/* #tag AI Plan Button */}
-              {/* <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
+              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
                 onClick={handleAIPlan} disabled={aiPlanPhase === "loading"}
                 className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
                 style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
                 {aiPlanPhase === "loading" ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span> : "🤖 AI PLAN"}
-              </motion.button> */}
+              </motion.button>
 
               {/* #tag Re-evaluate Button */}
               {/* <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
