@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.DEV ? "http://localhost:8000" : "/api";
 
 const PROPERTIES = [
   { key: "Priority",      label: "PRIORITY",   hex: "#f87171", bar: "#ef4444" },
@@ -18,10 +18,19 @@ const PROPERTIES = [
 const PREVIEW_PROPS = ["Urgency", "Importance", "Priority", "Relevance", "Difficulty", "Hierarchy", "Time_Minutes"];
 
 async function apiFetch(path, options = {}) {
+  const token = localStorage.getItem("token");
+  const headers = { "Content-Type": "application/json" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { ...headers, ...(options.headers || {}) },
     ...options,
   });
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.reload();
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? "API error");
@@ -45,7 +54,7 @@ function parseBulkText(text) {
 //region Root App
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function App() {
+function MainApp() {
   const [tasks, setTasks]           = useState([]);
   const [localEdits, setLocalEdits] = useState({});
   const [sortPhase, setSortPhase]   = useState("idle");
@@ -62,6 +71,9 @@ export default function App() {
   const [newModel, setNewModel]               = useState("");
   const [modelSavePhase, setModelSavePhase]   = useState("idle");
   const [modelError, setModelError]           = useState("");
+  const [newApiKey, setNewApiKey]             = useState("");
+  const [apiKeySavePhase, setApiKeySavePhase] = useState("idle");
+  const [apiKeyError, setApiKeyError]         = useState("");
 
   const [propertyModes, setPropertyModes]   = useState({});
   const [modeSavePhase, setModeSavePhase]   = useState("idle");
@@ -215,6 +227,24 @@ export default function App() {
     }
   };
 
+  const handleSaveApiKey = async () => {
+    if (!newApiKey.trim()) return;
+    setApiKeySavePhase("loading");
+    setApiKeyError("");
+    try {
+      await apiFetch("/users/me/api-key", {
+        method: "POST",
+        body: JSON.stringify({ api_key: newApiKey.trim() }),
+      });
+      setNewApiKey(""); // Clear it since we don't want to show it back
+      setApiKeySavePhase("success");
+      setTimeout(() => setApiKeySavePhase("idle"), 2000);
+    } catch (e) {
+      setApiKeyError(e.message);
+      setApiKeySavePhase("error");
+    }
+  };
+
   const handleAdd = async () => {
     if (!form.name.trim()) return;
     setAddPhase("loading"); setAddError("");
@@ -365,15 +395,25 @@ export default function App() {
         backgroundSize: "40px 40px",
       }} />
 
-      {/* Config Button */}
-      <motion.button
-        initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-        onClick={() => setShowConfigModal(true)}
-        className="fixed top-4 right-4 z-40 w-10 h-10 rounded-xl flex items-center justify-center"
-        style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(6,182,212,0.3)", backdropFilter: "blur(8px)" }}
-        whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-        <span className="text-lg">⚙️</span>
-      </motion.button>
+      {/* Top Right Controls */}
+      <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
+        <motion.button
+          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+          onClick={() => { localStorage.removeItem("token"); window.location.reload(); }}
+          className="px-3 h-10 rounded-xl flex items-center justify-center font-black text-xs tracking-widest"
+          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", backdropFilter: "blur(8px)" }}
+          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          LOGOUT
+        </motion.button>
+        <motion.button
+          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          onClick={() => setShowConfigModal(true)}
+          className="w-10 h-10 rounded-xl flex items-center justify-center"
+          style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(6,182,212,0.3)", backdropFilter: "blur(8px)" }}
+          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          <span className="text-lg">⚙️</span>
+        </motion.button>
+      </div>
 
       {/* ── Config Modal ── */}
       <AnimatePresence>
@@ -385,7 +425,7 @@ export default function App() {
             <motion.div
               initial={{ scale: 0.85, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.85, opacity: 0, y: 24 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="w-full max-w-md mx-4 rounded-2xl p-6"
+              className="w-full max-w-md mx-4 rounded-2xl p-6 max-h-[90vh] overflow-y-auto"
               style={{ background: "#0f172a", border: "1px solid rgba(6,182,212,0.3)" }}
               onClick={(e) => e.stopPropagation()}>
 
@@ -418,6 +458,34 @@ export default function App() {
                   <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">
                     openrouter.ai/models
                   </a>
+                </p>
+              </div>
+
+              {/* API Key Input */}
+              <div className="mb-6">
+                <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">
+                  Personal OpenRouter API Key
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={newApiKey} onChange={(e) => setNewApiKey(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSaveApiKey()}
+                    placeholder="sk-or-v1-..."
+                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all"
+                    style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
+                    onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
+                    onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                    onClick={handleSaveApiKey} disabled={apiKeySavePhase === "loading" || !newApiKey.trim()}
+                    className="px-4 rounded-xl font-black text-xs disabled:opacity-40"
+                    style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>
+                    {apiKeySavePhase === "loading" ? "..." : apiKeySavePhase === "success" ? "✔" : "SAVE"}
+                  </motion.button>
+                </div>
+                {apiKeyError && <p className="text-red-400 text-xs mt-2">⚠ {apiKeyError}</p>}
+                <p className="text-[10px] text-gray-600 mt-2">
+                  Your key is securely encrypted. Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:underline">openrouter.ai/keys</a>
                 </p>
               </div>
 
@@ -1642,4 +1710,118 @@ function Spinner() {
     <span className="inline-block w-3 h-3 rounded-full border-2 animate-spin"
       style={{ borderColor: "rgba(255,255,255,0.3)", borderTopColor: "#fff" }} />
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//region Auth & Wrapper
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AuthApp() {
+  const [isLogin, setIsLogin] = useState(true);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      if (isLogin) {
+        const formData = new URLSearchParams();
+        formData.append("username", username);
+        formData.append("password", password);
+        const res = await fetch(`${API}/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: formData
+        });
+        if (!res.ok) throw new Error("Invalid credentials");
+        const data = await res.json();
+        localStorage.setItem("token", data.access_token);
+        window.location.reload();
+      } else {
+        const res = await fetch(`${API}/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.detail || "Registration failed");
+        }
+        setIsLogin(true);
+        setError("Registration successful! Please log in.");
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4 text-gray-200 font-sans">
+      <div className="mb-8 text-center">
+        <h1 className="text-4xl font-black bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent mb-2">AI Task Sorter</h1>
+        <p className="text-gray-400">Prioritize and sort your tasks with AI</p>
+      </div>
+      <div className="max-w-md w-full bg-gray-900 border border-gray-800 rounded-xl p-8 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-500 to-transparent" />
+        
+        <h2 className="text-2xl font-bold mb-6 text-center text-white">{isLogin ? "Welcome Back" : "Create Account"}</h2>
+        {error && <div className="mb-4 p-3 bg-red-900/30 border border-red-800 text-red-200 rounded-lg text-sm">{error}</div>}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">USERNAME</label>
+            <input type="text" value={username} onChange={e => setUsername(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">PASSWORD</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
+          </div>
+          <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-400 hover:to-purple-400 text-white font-bold py-3 px-4 rounded-lg transition-all shadow-lg shadow-cyan-500/20 active:scale-[0.98]">
+            {loading ? <Spinner /> : (isLogin ? "Login" : "Register")}
+          </button>
+        </form>
+        <div className="mt-6 text-center text-sm text-gray-400">
+          {isLogin ? "Don't have an account? " : "Already have an account? "}
+          <button type="button" onClick={() => { setIsLogin(!isLogin); setError(""); }} className="text-cyan-400 hover:text-cyan-300 font-semibold transition-colors">
+            {isLogin ? "Register" : "Login"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      apiFetch("/users/me")
+        .then(() => setIsAuthenticated(true))
+        .catch(() => {
+          localStorage.removeItem("token");
+          setIsAuthenticated(false);
+        })
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <SpinRing color="cyan" />
+      </div>
+    );
+  }
+
+  return isAuthenticated ? <MainApp /> : <AuthApp />;
 }

@@ -14,12 +14,20 @@ from pathlib import Path
 
 from datetime                   import date, timedelta
 from typing                     import Any, Dict, List, Optional, Literal
-from fastapi                    import Body, FastAPI, HTTPException
+from fastapi                    import Body, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors    import CORSMiddleware
+from fastapi.security           import OAuth2PasswordRequestForm
 from pydantic                   import BaseModel, Field
 from dotenv                     import load_dotenv
+from sqlalchemy.orm             import Session
+
+from . import models, database, auth
+from .database import engine, get_db
 
 load_dotenv()
+
+# Create tables
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Task Sorter", version="1.2.0")
 
@@ -37,13 +45,12 @@ app.add_middleware(
 BACKEND_DIR = Path(__file__).parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
-TASKS_FILE: str = str(BACKEND_DIR / "tasks.json")
 MODEL_CONFIG_FILE: str = str(BACKEND_DIR / "model_config.json")
 CONFIG_FILE: str = str(BACKEND_DIR / "app_config.json")
 
 OPENROUTER_URL: str = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY")
-MODEL: str = os.getenv("MODEL")
+GLOBAL_OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY") # Optional fallback
+MODEL: str = os.getenv("MODEL", "anthropic/claude-3.5-sonnet")
 SITE_URL: str = "http://localhost:5173"
 SITE_NAME: str = "AI Task Sorter"
 
@@ -67,22 +74,24 @@ DEFAULT_PROPERTY_ORDER: List[str] = [
     "Time_Minutes"
 ]
 
-# Time presets in minutes
 TIME_PRESETS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 480, 960, 1440]
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 #region Pydantic Schemas
+
 class TaskCreate(BaseModel):
     Name: str
     Context: str = ""
+
 class TaskBulkItem(BaseModel):
     Name: str
     Context: str = ""
+
 class TaskBulkCreate(BaseModel):
     tasks: List[TaskBulkItem]
+
 class TaskUpdate(BaseModel):
     Name: Optional[str] = None
     Context: Optional[str] = None
@@ -94,135 +103,97 @@ class TaskUpdate(BaseModel):
     Urgency: Optional[int] = Field(None, ge=1, le=10)
     Importance: Optional[int] = Field(None, ge=1, le=10)
     Status: Optional[str] = None
+    Subtasks: Optional[List[Dict[str, Any]]] = None
+
 class SortRequest(BaseModel):
     tasks: List[Dict[str, Any]]
+
 class PostponeRequest(BaseModel):
     reason: str = ""
+
 class SubtaskAdd(BaseModel):
     name: str
+
 class SubtaskToggle(BaseModel):
     done: bool
+
 class ModelConfig(BaseModel):
     model: str
+
 class PropertyModeConfig(BaseModel):
     property_modes: Dict[str, Literal["scale", "binary"]]
+
 class PropertyOrderConfig(BaseModel):
     property_order: List[str]
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────────────────
-#region File I/O
+class UserCreate(BaseModel):
+    username: str
+    password: str
 
-def load_tasks() -> List[Dict]:
-    if not os.path.exists(TASKS_FILE):
-        print(f"Error: tasks file not found: {TASKS_FILE}")
-        return []
-    with open(TASKS_FILE, "r", encoding="utf-8") as fh:
-        try:
-            return json.load(fh)
-        except json.JSONDecodeError:
-            return []
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
-def save_tasks(tasks: List[Dict]) -> None:
-    with open(TASKS_FILE, "w", encoding="utf-8") as fh:
-        json.dump(tasks, fh, indent=2, ensure_ascii=False)
-
-def load_config() -> Dict:
-    """Load app configuration (property modes, order, etc.)"""
-    config_path = str(BACKEND_DIR / CONFIG_FILE)
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as fh:
-                config = json.load(fh)
-                # Ensure property_modes exists
-                if "property_modes" not in config:
-                    config["property_modes"] = DEFAULT_PROPERTY_MODES.copy()
-                else:
-                    for prop, mode in DEFAULT_PROPERTY_MODES.items():
-                        if prop not in config["property_modes"]:
-                            config["property_modes"][prop] = mode
-                # Ensure property_order exists
-                if "property_order" not in config:
-                    config["property_order"] = DEFAULT_PROPERTY_ORDER.copy()
-                else:
-                    # Make sure all properties are in the order
-                    existing = set(config["property_order"])
-                    for prop in DEFAULT_PROPERTY_ORDER:
-                        if prop not in existing:
-                            config["property_order"].append(prop)
-                return config
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return {
-        "property_modes": DEFAULT_PROPERTY_MODES.copy(),
-        "property_order": DEFAULT_PROPERTY_ORDER.copy()
-    }
-
-def save_config(config: Dict) -> None:
-    """Save app configuration"""
-    config_path = str(BACKEND_DIR / CONFIG_FILE)
-    with open(config_path, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=2, ensure_ascii=False)
+class ApiKeyUpdate(BaseModel):
+    api_key: str
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#region Postpone reactivation
+#region User Settings Helpers
 
-async def _reactivate_due_postponed(tasks: List[Dict]) -> List[Dict]:
-    today = date.today().isoformat()
-    due = [t for t in tasks if t.get("Status") == "Postponed" and t.get("Postponed_Until", "9999-99-99") <= today]
-    if not due:
-        return tasks
-
-    async def wake(task: Dict) -> Dict:
-        reason = task.get("Postpone_Reason", "")
-        base_context = task.get("Context", "")
-        new_context = base_context
-        if reason:
-            new_context = f"{base_context} [Postponed: {reason}]".strip()
-        metrics = await _score_task(task["Name"], new_context)
-        return {
-            **task, **metrics,
-            "Context": new_context,
-            "Status": "Active",
-            "Postponed_Until": None,
-            "Postpone_Reason": None,
-        }
-
-    woken = await asyncio.gather(*[wake(t) for t in due])
-    woken_map = {t["Task_ID"]: t for t in woken}
-    updated = [woken_map.get(t["Task_ID"], t) for t in tasks]
-    save_tasks(updated)
-    return updated
+def get_user_settings(user: models.User) -> Dict:
+    settings = user.settings or {}
+    config = settings.copy()
+    if "property_modes" not in config:
+        config["property_modes"] = DEFAULT_PROPERTY_MODES.copy()
+    else:
+        for prop, mode in DEFAULT_PROPERTY_MODES.items():
+            if prop not in config["property_modes"]:
+                config["property_modes"][prop] = mode
+    
+    if "property_order" not in config:
+        config["property_order"] = DEFAULT_PROPERTY_ORDER.copy()
+    else:
+        existing = set(config["property_order"])
+        for prop in DEFAULT_PROPERTY_ORDER:
+            if prop not in existing:
+                config["property_order"].append(prop)
+    
+    if "model" not in config:
+        config["model"] = MODEL
+        
+    return config
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 #region OpenRouter helpers
-def _or_headers() -> Dict[str, str]:
+
+def _get_api_key_for_user(user: models.User) -> str:
+    if user and user.encrypted_openrouter_key:
+        decrypted = auth.decrypt_api_key(user.encrypted_openrouter_key)
+        if decrypted:
+            return decrypted
+    if GLOBAL_OPENROUTER_API_KEY:
+        return GLOBAL_OPENROUTER_API_KEY
+    raise HTTPException(status_code=400, detail="No OpenRouter API key found. Please set one in Settings.")
+
+def _or_headers(api_key: str) -> Dict[str, str]:
     return {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": SITE_URL,
         "X-Title": SITE_NAME,
     }
 
 def _clean_json_fence(text: str) -> str:
-    """Extract the first balanced JSON object or array from model output."""
     text = (text or "").strip()
-
-    # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-
-    # Walk the string character by character to find the first balanced { } or [ ]
     opener, closer = None, None
     depth = 0
     start = -1
@@ -243,64 +214,47 @@ def _clean_json_fence(text: str) -> str:
                 depth -= 1
                 if depth == 0:
                     return text[start:i + 1]
-
-    # Nothing balanced found; return as-is and let the caller deal with it
     return text
 
 def _attempt_fix_truncated_json(text: str) -> Optional[str]:
-    """Attempt to fix truncated or malformed JSON by closing open brackets,
-    stripping trailing commas, and reconstructing from whatever key/value
-    pairs can be salvaged — including boolean and text representations."""
     text = text.strip()
-
-    # Close unclosed braces/brackets
     text += '}' * max(0, text.count('{') - text.count('}'))
     text += ']' * max(0, text.count('[') - text.count(']'))
     text = re.sub(r',\s*\}', '}', text)
     text = re.sub(r',\s*\]', ']', text)
-
     try:
         json.loads(text)
         return text
     except json.JSONDecodeError:
         pass
-
     BINARY_FIELDS = {"Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"}
     ALL_FIELDS    = BINARY_FIELDS | {"Time_Minutes"}
     reconstructed: Dict[str, int] = {}
-
-    # Numeric values  →  "Key": 42
     for key, value in re.findall(r'"([^"]+)"\s*:\s*([0-9]+(?:\.[0-9]*)?)', text):
         if key in ALL_FIELDS:
             reconstructed[key] = int(float(value))
-
-    # JSON booleans  →  "Key": true / false
     for key, value in re.findall(r'"([^"]+)"\s*:\s*(true|false)\b', text, re.IGNORECASE):
         if key in BINARY_FIELDS and key not in reconstructed:
             reconstructed[key] = 1 if value.lower() == "true" else 0
-
-    # Quoted text    →  "Key": "yes" / "no" / "Yes" / …
     for key, value in re.findall(r'"([^"]+)"\s*:\s*"(yes|no|high|low|true|false)"', text, re.IGNORECASE):
         if key in BINARY_FIELDS and key not in reconstructed:
             reconstructed[key] = 1 if value.lower() in ("yes", "high", "true") else 0
-
     if not reconstructed:
         return None
-
-    # Fill in any missing fields with safe defaults (0 = NO for binary)
     for field in BINARY_FIELDS:
         reconstructed.setdefault(field, 0)
     reconstructed.setdefault("Time_Minutes", 30)
-
     return json.dumps(reconstructed)
 
-async def _call_openrouter(prompt: str, max_tokens: int = 1000, temperature: float = 0.2) -> str:
+async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 1000, temperature: float = 0.2) -> str:
+    api_key = _get_api_key_for_user(user)
+    user_settings = get_user_settings(user)
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             OPENROUTER_URL,
-            headers=_or_headers(),
+            headers=_or_headers(api_key),
             json={
-                "model": load_model_config(),
+                "model": user_settings.get("model", MODEL),
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -311,7 +265,6 @@ async def _call_openrouter(prompt: str, max_tokens: int = 1000, temperature: flo
     return response.json()["choices"][0]["message"]["content"]
 
 def _build_score_prompt(name: str, context: str, property_modes: Dict[str, str]) -> str:
-    """Build scoring prompt based on current property modes"""
     score_fields = []
     for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
         if property_modes.get(prop) == "binary":
@@ -344,9 +297,9 @@ Scoring rubric:
 
 Return ONLY the JSON object. Start with {{ and end with }}. No trailing commas."""
 
-
-async def _score_task(name: str, context: str) -> Dict[str, Any]:
-    property_modes = _get_property_modes()
+async def _score_task(name: str, context: str, user: models.User) -> Dict[str, Any]:
+    config = get_user_settings(user)
+    property_modes = config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
 
     _DEFAULTS: Dict[str, Any] = {
         "Priority": 10, "Hierarchy": 10, "Difficulty": 10,
@@ -371,7 +324,7 @@ async def _score_task(name: str, context: str) -> Dict[str, Any]:
 
     metrics = _DEFAULTS.copy()
     try:
-        raw     = await _call_openrouter(_build_score_prompt(name, context, property_modes), max_tokens=300, temperature=0.15)
+        raw = await _call_openrouter(_build_score_prompt(name, context, property_modes), user, max_tokens=300, temperature=0.15)
         cleaned = _clean_json_fence(raw)
         try:
             metrics = json.loads(cleaned)
@@ -380,14 +333,11 @@ async def _score_task(name: str, context: str) -> Dict[str, Any]:
             if fixed_json:
                 try:
                     metrics = json.loads(fixed_json)
-                    print(f"Recovered JSON for '{name}'")
                 except json.JSONDecodeError:
-                    print(f"Unrecoverable JSON for '{name}' — using defaults. Raw: {raw!r}")
                     metrics = _DEFAULTS.copy()
             else:
-                print(f"No JSON found for '{name}' — using defaults. Raw: {raw!r}")
                 metrics = _DEFAULTS.copy()
-    except Exception as exc:  # network error, 502, timeout, etc.
+    except Exception as exc:
         print(f"AI scoring failed for '{name}' ({type(exc).__name__}: {exc}) — using defaults.")
 
     result = {}
@@ -401,54 +351,113 @@ async def _score_task(name: str, context: str) -> Dict[str, Any]:
 
     result["Time_Minutes"] = clamp_minutes(metrics.get("Time_Minutes"))
     return result
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-#region Utility Functions
 
 def _normalize_time_for_sorting(time_minutes: int) -> float:
-    """Convert minutes to a normalized value for sorting (lower time = higher priority in tiebreaker)"""
     if time_minutes <= 0:
         return 0.1
     return max(1, 10 - (time_minutes / 160))
 
-def _get_property_modes() -> Dict[str, str]:
-    """Get current property modes from config"""
-    config = load_config()
-    return config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
+def _task_to_dict(task: models.Task) -> Dict:
+    return {
+        "Task_ID": task.Task_ID,
+        "Name": task.Name,
+        "Context": task.Context,
+        "Status": task.Status,
+        "Priority": task.Priority,
+        "Hierarchy": task.Hierarchy,
+        "Time_Minutes": task.Time_Minutes,
+        "Difficulty": task.Difficulty,
+        "Relevance": task.Relevance,
+        "Urgency": task.Urgency,
+        "Importance": task.Importance,
+        "Postponed_Until": task.Postponed_Until,
+        "Postpone_Reason": task.Postpone_Reason,
+        "Subtasks": task.Subtasks or []
+    }
+
+async def _reactivate_due_postponed(tasks: List[models.Task], user: models.User, db: Session) -> List[Dict]:
+    today = date.today().isoformat()
+    due = [t for t in tasks if t.Status == "Postponed" and (t.Postponed_Until or "9999-99-99") <= today]
+    if not due:
+        return [_task_to_dict(t) for t in tasks]
+
+    async def wake(task: models.Task):
+        reason = task.Postpone_Reason or ""
+        base_context = task.Context or ""
+        new_context = base_context
+        if reason:
+            new_context = f"{base_context} [Postponed: {reason}]".strip()
+        metrics = await _score_task(task.Name, new_context, user)
+        task.Context = new_context
+        task.Status = "Active"
+        task.Postponed_Until = None
+        task.Postpone_Reason = None
+        for key, value in metrics.items():
+            setattr(task, key, value)
+        return task
+
+    await asyncio.gather(*[wake(t) for t in due])
+    db.commit()
+    return [_task_to_dict(t) for t in tasks]
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#region Model Configuration Helpers
+#region Auth Routes
 
-def load_model_config() -> str:
-    if os.path.exists(MODEL_CONFIG_FILE):
-        try:
-            with open(MODEL_CONFIG_FILE, "r", encoding="utf-8") as fh:
-                config = json.load(fh)
-                return config.get("model", MODEL)
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return MODEL
+@app.post("/register", response_model=Token)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    hashed_password = auth.get_password_hash(user.password)
+    new_user = models.User(
+        id=str(uuid.uuid4()),
+        username=user.username,
+        hashed_password=hashed_password
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    access_token = auth.create_access_token(data={"sub": new_user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 
-def save_model_config(model: str) -> None:
-    with open(MODEL_CONFIG_FILE, "w", encoding="utf-8") as fh:
-        json.dump({"model": model}, fh, indent=2)
+@app.post("/login", response_model=Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = auth.create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/users/me")
+def read_users_me(current_user: models.User = Depends(auth.get_current_user)):
+    return {
+        "username": current_user.username,
+        "has_api_key": bool(current_user.encrypted_openrouter_key)
+    }
+
+@app.post("/users/me/api-key")
+def update_api_key(key_data: ApiKeyUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
+    encrypted_key = auth.encrypt_api_key(key_data.api_key)
+    current_user.encrypted_openrouter_key = encrypted_key
+    db.commit()
+    return {"message": "API key updated successfully"}
+
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#region Routes
-
-# ─────────────────────────────────────────────────────────────────────────────
-#region config
+#region Config Routes
 
 @app.get("/config/properties")
-def get_property_modes() -> Dict:
-    config = load_config()
+def get_property_modes(current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    config = get_user_settings(current_user)
     return {
         "property_modes": config.get("property_modes", DEFAULT_PROPERTY_MODES),
         "available_modes": ["binary", "scale"],
@@ -456,121 +465,124 @@ def get_property_modes() -> Dict:
     }
 
 @app.post("/config/properties")
-def set_property_modes(config: PropertyModeConfig) -> Dict:
+def set_property_modes(config: PropertyModeConfig, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     valid_props = set(DEFAULT_PROPERTY_MODES.keys())
     for prop, mode in config.property_modes.items():
         if prop not in valid_props:
             raise HTTPException(status_code=400, detail=f"Invalid property: {prop}")
         if mode not in ["scale", "binary"]:
             raise HTTPException(status_code=400, detail=f"Invalid mode for {prop}: {mode}")
-        if prop == "Time_Minutes":
+        if prop == "Time_Minutes" and mode != "scale":
             raise HTTPException(status_code=400, detail="Time_Minutes must always be scale mode")
-    app_config = load_config()
+    
+    app_config = get_user_settings(current_user)
     app_config["property_modes"] = config.property_modes
-    save_config(app_config)
+    current_user.settings = app_config
+    db.commit()
     return {"message": "Property modes updated", "property_modes": app_config["property_modes"]}
 
 @app.get("/config/property-order")
-def get_property_order() -> Dict:
-    config = load_config()
+def get_property_order(current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    config = get_user_settings(current_user)
     return {"property_order": config.get("property_order", DEFAULT_PROPERTY_ORDER)}
 
 @app.post("/config/property-order")
-def set_property_order(config: PropertyOrderConfig) -> Dict:
+def set_property_order(config: PropertyOrderConfig, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     valid_props = set(DEFAULT_PROPERTY_MODES.keys())
     ordered = config.property_order
-    
-    # Validate all props are present
     if set(ordered) != valid_props:
         raise HTTPException(
             status_code=400, 
             detail=f"Property order must contain exactly: {sorted(valid_props)}"
         )
     
-    app_config = load_config()
+    app_config = get_user_settings(current_user)
     app_config["property_order"] = ordered
-    save_config(app_config)
+    current_user.settings = app_config
+    db.commit()
     return {"message": "Property order updated", "property_order": ordered}
 
 @app.get("/config/model")
-def get_model() -> Dict:
-    return {"model": load_model_config()}
+def get_model(current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    config = get_user_settings(current_user)
+    return {"model": config.get("model", MODEL)}
 
 @app.post("/config/model")
-def set_model(config: ModelConfig) -> Dict:
-    save_model_config(config.model)
+def set_model(config: ModelConfig, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    app_config = get_user_settings(current_user)
+    app_config["model"] = config.model
+    current_user.settings = app_config
+    db.commit()
     return {"message": "Model updated", "model": config.model}
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-#region tasks
+#region Tasks Routes
 
 @app.get("/tasks")
-async def get_tasks() -> List[Dict]:
-    tasks = load_tasks()
-    tasks = await _reactivate_due_postponed(tasks)
-    save_tasks(tasks)
-    return [t for t in tasks if t.get("Status") == "Active"]
-
-@app.get("/tasks/all")
-def get_all_tasks() -> List[Dict]:
-    return load_tasks()
+async def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+    updated_tasks = await _reactivate_due_postponed(tasks, current_user, db)
+    return [t for t in updated_tasks if t.get("Status") == "Active"]
 
 @app.post("/tasks/evaluate")
-async def evaluate_task(task: TaskCreate) -> Dict:
-    metrics = await _score_task(task.Name, task.Context)
-    new_task: Dict[str, Any] = {
-        "Task_ID"        : str(uuid.uuid4()),
-        "Name"           : task.Name,
-        "Context"        : task.Context or "",
-        "Status"         : "Active",
-        "Subtasks"       : [],
-        "Postponed_Until": None,
-        "Postpone_Reason": None,
-        **metrics,
-    }
-    tasks = load_tasks()
-    tasks.append(new_task)
-    save_tasks(tasks)
-    return new_task
+async def evaluate_task(task: TaskCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    metrics = await _score_task(task.Name, task.Context, current_user)
+    new_task = models.Task(
+        Task_ID=str(uuid.uuid4()),
+        user_id=current_user.id,
+        Name=task.Name,
+        Context=task.Context or "",
+        Status="Active",
+        Subtasks=[],
+        **metrics
+    )
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
+    return _task_to_dict(new_task)
 
 @app.post("/tasks/evaluate-bulk")
-async def evaluate_bulk(payload: TaskBulkCreate) -> List[Dict]:
-    async def score_one(item: TaskBulkItem) -> Dict[str, Any]:
-        metrics = await _score_task(item.Name, item.Context)
-        return {
-            "Task_ID"        : str(uuid.uuid4()),
-            "Name"           : item.Name,
-            "Context"        : item.Context or "",
-            "Status"         : "Active",
-            "Subtasks"       : [],
-            "Postponed_Until": None,
-            "Postpone_Reason": None,
-            **metrics,
-        }
+async def evaluate_bulk(payload: TaskBulkCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    async def score_one(item: TaskBulkItem) -> models.Task:
+        metrics = await _score_task(item.Name, item.Context, current_user)
+        return models.Task(
+            Task_ID=str(uuid.uuid4()),
+            user_id=current_user.id,
+            Name=item.Name,
+            Context=item.Context or "",
+            Status="Active",
+            Subtasks=[],
+            **metrics
+        )
+    
     new_tasks = list(await asyncio.gather(*[score_one(item) for item in payload.tasks]))
-    all_tasks = load_tasks()
-    all_tasks.extend(new_tasks)
-    save_tasks(all_tasks)
-    return new_tasks
+    for task in new_tasks:
+        db.add(task)
+    db.commit()
+    
+    for task in new_tasks:
+        db.refresh(task)
+    
+    return [_task_to_dict(t) for t in new_tasks]
 
 @app.post("/tasks/reevaluate-all")
-async def reevaluate_all() -> List[Dict]:
-    all_tasks = load_tasks()
-    active = [t for t in all_tasks if t.get("Status") == "Active"]
-    if not active:
+async def reevaluate_all(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    active_tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id, models.Task.Status == "Active").all()
+    if not active_tasks:
         return []
-    async def rescore(task: Dict) -> Dict:
-        metrics = await _score_task(task["Name"], task.get("Context", ""))
-        return {**task, **metrics}
-    rescored = await asyncio.gather(*[rescore(t) for t in active])
-    rescored_map = {t["Task_ID"]: t for t in rescored}
-    updated_all = [rescored_map.get(t["Task_ID"], t) for t in all_tasks]
-    save_tasks(updated_all)
-    return [t for t in updated_all if t.get("Status") == "Active"]
+    
+    async def rescore(task: models.Task):
+        metrics = await _score_task(task.Name, task.Context or "", current_user)
+        for k, v in metrics.items():
+            setattr(task, k, v)
+        return task
+
+    await asyncio.gather(*[rescore(t) for t in active_tasks])
+    db.commit()
+    
+    return [_task_to_dict(t) for t in active_tasks]
 
 @app.post("/tasks/sort")
 async def sort_tasks(request: SortRequest) -> Dict:
@@ -590,10 +602,8 @@ async def sort_tasks(request: SortRequest) -> Dict:
     sorted_tasks = sorted(request.tasks, key=sort_key)
     return {"sorted_ids": [t["Task_ID"] for t in sorted_tasks], "method": "mathematical"}
 
-#region AI-Plan
 @app.post("/tasks/ai-plan")
-async def ai_action_plan(request: SortRequest) -> Dict:
-    """Use AI to create an optimal action plan."""
+async def ai_action_plan(request: SortRequest, current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     if not request.tasks:
         return {"sorted_ids": [], "plan_text": "No tasks to plan.", "reasoning": "", "method": "ai"}
 
@@ -609,26 +619,25 @@ async def ai_action_plan(request: SortRequest) -> Dict:
             f" | Priority:{task.get('Priority',1)} Time:{task.get('Time_Minutes',30)}min"
         )
 
-    prompt = f"""Output ONLY a JSON object — no explanation, no markdown, no reasoning text.
+    prompt = f"""Output ONLY a JSON object — no explanation, no markdown.
 
-Sort the tasks below by this priority order:
-1. Urgent+Important first
-2. Blocking (Hierarchy=YES) tasks next to unblock others
-3. High Priority tasks
-4. Shorter tasks as quick wins when priority is equal
+Organize the tasks below into a strict chronological sequence with specific time blocks for today. If the total duration exceeds 8 hours (480 minutes), automatically move the lower-priority tasks into a future schedule array.
 
 Tasks:
 {chr(10).join(tasks_summary)}
 
 Respond with exactly this JSON and nothing else:
-{{"sorted_task_ids":{json.dumps(full_ids)},"plan_text":"<2-3 sentence plan>","reasoning":"<1 sentence>"}}
-
-Replace the sorted_task_ids array with the IDs reordered by the rules above.
-Do not add any text before or after the JSON object."""
+{{
+  "sorted_task_ids": ["<array of IDs scheduled for today>"],
+  "future_task_ids": ["<array of IDs pushed to tomorrow>"],
+  "plan_text": "<Detailed chronological schedule string with time blocks for today's tasks>",
+  "reasoning": "<1 sentence explaining why tasks were sequenced this way and what was deferred>"
+}}
+"""
 
     raw = ""
     try:
-        raw = await _call_openrouter(prompt, max_tokens=1200, temperature=0.1)
+        raw = await _call_openrouter(prompt, current_user, max_tokens=1200, temperature=0.1)
         cleaned = _clean_json_fence(raw)
         plan = json.loads(cleaned)
 
@@ -637,22 +646,26 @@ Do not add any text before or after the JSON object."""
 
         task_ids   = set(full_ids)
         sorted_ids = [tid for tid in plan["sorted_task_ids"] if tid in task_ids]
-        # Append any the AI dropped so the list is always complete
-        seen = set(sorted_ids)
+        
+        future_ids = plan.get("future_task_ids", [])
+        if not isinstance(future_ids, list):
+            future_ids = []
+            
+        future_task_ids = [tid for tid in future_ids if tid in task_ids and tid not in sorted_ids]
+        
+        seen = set(sorted_ids) | set(future_task_ids)
         sorted_ids.extend(tid for tid in full_ids if tid not in seen)
 
         return {
             "sorted_ids": sorted_ids,
+            "future_task_ids": future_task_ids,
             "plan_text":  plan.get("plan_text", ""),
             "reasoning":  plan.get("reasoning", ""),
             "method":     "ai",
         }
 
     except (json.JSONDecodeError, ValueError):
-        # Graceful fallback: apply the same math sort the /tasks/sort endpoint uses
-        # rather than returning a 502 to the user.
         print(f"AI plan parse failed — falling back to math sort. Raw: {raw!r}")
-
         def sort_key(t: Dict) -> tuple:
             return (
                 -(t.get("Urgency", 1) * t.get("Importance", 1)),
@@ -661,93 +674,97 @@ Do not add any text before or after the JSON object."""
                 _normalize_time_for_sorting(t.get("Time_Minutes", 30)),
                 -t.get("Relevance", 1),
             )
-
         sorted_tasks = sorted(request.tasks, key=sort_key)
         return {
             "sorted_ids": [t["Task_ID"] for t in sorted_tasks],
+            "future_task_ids": [],
             "plan_text":  "Sorted automatically by urgency, importance, and priority.",
             "reasoning":  "AI plan could not be parsed; mathematical sort applied.",
             "method":     "math_fallback",
         }
-#endregion
 
 @app.put("/tasks/{task_id}")
-def update_task(task_id: str, update: TaskUpdate) -> Dict:
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            tasks[i].update(update.model_dump(exclude_none=True))
-            save_tasks(tasks)
-            return tasks[i]
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+def update_task(task_id: str, update: TaskUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
+    update_data = update.model_dump(exclude_none=True)
+    for k, v in update_data.items():
+        setattr(task, k, v)
+    db.commit()
+    db.refresh(task)
+    return _task_to_dict(task)
 
 @app.patch("/tasks/{task_id}/complete")
-def complete_task(task_id: str) -> Dict:
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            tasks[i]["Status"] = "Completed"
-            save_tasks(tasks)
-            return {"message": "Task completed", "Task_ID": task_id}
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+def complete_task(task_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
+    task.Status = "Completed"
+    db.commit()
+    return {"message": "Task completed", "Task_ID": task_id}
 
 @app.patch("/tasks/{task_id}/postpone")
-def postpone_task(task_id: str, body: PostponeRequest) -> Dict:
+def postpone_task(task_id: str, body: PostponeRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            tasks[i]["Status"]          = "Postponed"
-            tasks[i]["Postponed_Until"] = tomorrow
-            tasks[i]["Postpone_Reason"] = body.reason.strip()
-            save_tasks(tasks)
-            return {"message": "Task postponed", "Task_ID": task_id, "until": tomorrow}
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    task.Status = "Postponed"
+    task.Postponed_Until = tomorrow
+    task.Postpone_Reason = body.reason.strip()
+    db.commit()
+    return {"message": "Task postponed", "Task_ID": task_id, "until": tomorrow}
 
 @app.post("/tasks/bulk-update")
-def bulk_update(updated_tasks: List[Dict[str, Any]] = Body(...)) -> Dict:
-    all_tasks = load_tasks()
-    task_map = {t["Task_ID"]: t for t in all_tasks}
+def bulk_update(updated_tasks: List[Dict[str, Any]] = Body(...), db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     updated_count = 0
     for updated in updated_tasks:
         tid = updated.get("Task_ID")
-        if tid and tid in task_map:
-            task_map[tid].update(updated)
-            updated_count += 1
-    save_tasks(list(task_map.values()))
+        if tid:
+            task = db.query(models.Task).filter(models.Task.Task_ID == tid, models.Task.user_id == current_user.id).first()
+            if task:
+                for k, v in updated.items():
+                    if hasattr(task, k) and k != "Task_ID" and k != "user_id":
+                        setattr(task, k, v)
+                updated_count += 1
+    db.commit()
     return {"message": f"Bulk-updated {updated_count} task(s)"}
 
 @app.delete("/tasks/{task_id}")
-def delete_task(task_id: str) -> Dict:
-    tasks = load_tasks()
-    filtered = [t for t in tasks if t["Task_ID"] != task_id]
-    if len(filtered) == len(tasks):
+def delete_task(task_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
-    save_tasks(filtered)
+    
+    db.delete(task)
+    db.commit()
     return {"message": "Task deleted", "Task_ID": task_id}
+
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-#region subtasks
+#region Subtasks Routes
 
 @app.post("/tasks/{task_id}/subtasks/suggest")
-async def suggest_subtasks(task_id: str) -> Dict:
-    tasks = load_tasks()
-    task = next((t for t in tasks if t["Task_ID"] == task_id), None)
+async def suggest_subtasks(task_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
     if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
 
-    existing = [s["name"] for s in task.get("Subtasks", [])]
+    existing = [s["name"] for s in (task.Subtasks or [])]
     existing_str = "\n".join(f"- {s}" for s in existing) if existing else "None yet."
 
     prompt = f"""You are a precise project planning AI.
 Given the task below, suggest 3 to 6 concrete, actionable subtasks.
 Output ONLY a valid JSON array of strings — no explanation, no markdown fences.
 
-Task Name    : {task["Name"]}
-Task Context : {task.get("Context") or "No context provided"}
-Estimated Time: {task.get("Time_Minutes", "Unknown")} minutes
+Task Name    : {task.Name}
+Task Context : {task.Context or "No context provided"}
+Estimated Time: {task.Time_Minutes} minutes
 Existing subtasks:
 {existing_str}
 
@@ -759,7 +776,7 @@ Rules:
 - Do not repeat existing subtasks
 - Order logically from first to last step"""
 
-    raw = await _call_openrouter(prompt, max_tokens=400, temperature=0.3)
+    raw = await _call_openrouter(prompt, current_user, max_tokens=400, temperature=0.3)
     try:
         suggestions = json.loads(_clean_json_fence(raw))
         if not isinstance(suggestions, list):
@@ -770,73 +787,60 @@ Rules:
     return {"suggestions": suggestions}
 
 @app.post("/tasks/{task_id}/subtasks")
-def add_subtask(task_id: str, body: SubtaskAdd) -> Dict:
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            subtask = {"id": str(uuid.uuid4()), "name": body.name.strip(), "done": False}
-            if "Subtasks" not in tasks[i]:
-                tasks[i]["Subtasks"] = []
-            tasks[i]["Subtasks"].append(subtask)
-            save_tasks(tasks)
-            return subtask
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+def add_subtask(task_id: str, body: SubtaskAdd, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
+    subtask = {"id": str(uuid.uuid4()), "name": body.name.strip(), "done": False}
+    subs = list(task.Subtasks or [])
+    subs.append(subtask)
+    # Reassign to trigger JSON update
+    task.Subtasks = subs
+    db.commit()
+    return subtask
 
 @app.patch("/tasks/{task_id}/subtasks/{subtask_id}")
-def toggle_subtask(task_id: str, subtask_id: str, body: SubtaskToggle) -> Dict:
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            for j, s in enumerate(t.get("Subtasks", [])):
-                if s["id"] == subtask_id:
-                    tasks[i]["Subtasks"][j]["done"] = body.done
-                    save_tasks(tasks)
-                    return tasks[i]["Subtasks"][j]
-            raise HTTPException(status_code=404, detail=f"Subtask {subtask_id!r} not found")
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+def toggle_subtask(task_id: str, subtask_id: str, body: SubtaskToggle, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
+    subs = list(task.Subtasks or [])
+    updated = None
+    for i, s in enumerate(subs):
+        if s["id"] == subtask_id:
+            subs[i]["done"] = body.done
+            updated = subs[i]
+            break
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Subtask {subtask_id!r} not found")
+        
+    task.Subtasks = subs
+    db.commit()
+    return updated
 
 @app.delete("/tasks/{task_id}/subtasks/{subtask_id}")
-def delete_subtask(task_id: str, subtask_id: str) -> Dict:
-    tasks = load_tasks()
-    for i, t in enumerate(tasks):
-        if t["Task_ID"] == task_id:
-            before = len(t.get("Subtasks", []))
-            tasks[i]["Subtasks"] = [s for s in t.get("Subtasks", []) if s["id"] != subtask_id]
-            if len(tasks[i]["Subtasks"]) == before:
-                raise HTTPException(status_code=404, detail=f"Subtask {subtask_id!r} not found")
-            save_tasks(tasks)
-            return {"message": "Subtask deleted"}
-    raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+def delete_subtask(task_id: str, subtask_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+    
+    subs = list(task.Subtasks or [])
+    before = len(subs)
+    subs = [s for s in subs if s["id"] != subtask_id]
+    if len(subs) == before:
+        raise HTTPException(status_code=404, detail=f"Subtask {subtask_id!r} not found")
+        
+    task.Subtasks = subs
+    db.commit()
+    return {"message": "Subtask deleted"}
 
 #endregion
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-#region misc
 
 @app.get("/health")
 def health() -> Dict:
     return {
         "status": "ok",
-        "tasks_file": TASKS_FILE,
-        "model": load_model_config(),
-        "property_modes": load_config().get("property_modes", DEFAULT_PROPERTY_MODES),
+        "model": MODEL,
     }
-
-@app.get("/debug/file")
-def debug_file():
-    tasks_file = TASKS_FILE
-    exists = os.path.exists(tasks_file)
-    content = None
-    if exists:
-        with open(tasks_file, "r", encoding="utf-8") as f:
-            content = f.read()
-    return {
-        "tasks_file_path": tasks_file,
-        "file_exists": exists,
-        "file_content_preview": content[:500] if content else None,
-        "current_working_directory": os.getcwd(),
-    }
-
-#endregion
-# ─────────────────────────────────────────────────────────────────────────────

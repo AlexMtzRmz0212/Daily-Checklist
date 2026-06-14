@@ -33,7 +33,7 @@ source .venv/bin/activate # Mac/Linux
 
 # Install & run
 pip install fastapi "uvicorn[standard]" httpx pydantic
-uvicorn main:app --reload --port 8000
+uvicorn backend.main:app --reload --port 8000
 ```
 
 ### 4 — Frontend (new terminal)
@@ -59,10 +59,13 @@ Double-click `Sorter.bat` to start both servers and open Chrome automatically.
 Daily-Checklist/
 ├── .env                 ← Your keys (gitignored)
 ├── .env.example         ← Template
-├── main.py              ← Backend
 ├── requirements.txt     ← Python deps
 ├── Sorter.bat           ← Launcher
-├── frontend/            ← Complete React app
+├── backend/             ← FastAPI Backend
+│   ├── main.py
+│   ├── models.py
+│   └── database.py
+├── task-sorter/         ← Complete React app
 │   ├── src/
 │   │   ├── App.jsx
 │   │   ├── main.jsx
