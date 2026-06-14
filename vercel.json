@@ -12,14 +12,14 @@
       "use": "@vercel/python"
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "backend/main.py"
+      "source": "/api/(.*)",
+      "destination": "/backend/main.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "task-sorter/$1"
+      "source": "/(.*)",
+      "destination": "/task-sorter/$1"
     }
   ]
 }
