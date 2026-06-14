@@ -1,16 +1,49 @@
-# React + Vite
+# AI Task Sorter - Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the React frontend for the AI Task Sorter application, bootstrapped with Vite.
 
-Currently, two official plugins are available:
+## Architecture
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Framework**: React + Vite
+- **Styling**: Tailwind CSS
+- **Animations**: Framer Motion
+- **Icons**: Lucide React
 
-## React Compiler
+## Conventions
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### API Communication
 
-## Expanding the ESLint configuration
+All API calls from the frontend should utilize the `fetchApi` wrapper located in `src/utils/api.js`. 
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+This wrapper standardizes API communication across the app by:
+- Automatically attaching the JWT Authorization token (`Bearer`) from local storage.
+- Intercepting HTTP errors (status >= 400).
+- Safely handling empty API responses (e.g., HTTP 204 No Content).
+- Automatically handling unauthorized errors (HTTP 401) by clearing the local session and reloading the app.
+- Safely parsing the JSON response only when it's guaranteed to be valid, avoiding generic "Unexpected token 'T' in JSON at position X" errors.
+
+**Example Usage**:
+
+```javascript
+import { fetchApi } from "./utils/api";
+
+// GET request
+const tasks = await fetchApi("/tasks");
+
+// POST request with body
+const result = await fetchApi("/tasks/evaluate", {
+  method: "POST",
+  body: JSON.stringify({ name: "New task" })
+});
+```
+
+## Running Locally
+
+To run the frontend development server:
+
+```bash
+npm install
+npm run dev
+```
+
+The app will be available at [http://localhost:5173](http://localhost:5173).

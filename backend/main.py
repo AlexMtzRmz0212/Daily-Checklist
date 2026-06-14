@@ -844,3 +844,18 @@ def health() -> Dict:
         "status": "ok",
         "model": MODEL,
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Middleware to gracefully strip the /api prefix from Vercel routing
+class VercelAPIMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path.startswith("/api/") or path == "/api":
+                scope["path"] = path[4:] or "/"
+        await self.app(scope, receive, send)
+
+app = VercelAPIMiddleware(app)

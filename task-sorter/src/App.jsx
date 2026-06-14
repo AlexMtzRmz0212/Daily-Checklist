@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
+import { fetchApi } from "./utils/api";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "/api";
 
@@ -23,19 +24,33 @@ async function apiFetch(path, options = {}) {
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  const res = await fetch(`${API}${path}`, {
-    headers: { ...headers, ...(options.headers || {}) },
-    ...options,
-  });
-  if (res.status === 401) {
-    localStorage.removeItem("token");
-    window.location.reload();
+  
+  try {
+    return await fetchApi(`${API}${path}`, {
+      headers: { ...headers, ...(options.headers || {}) },
+      ...options,
+    });
+  } catch (error) {
+    if (error.message.includes("API Error (401)")) {
+      localStorage.removeItem("token");
+      window.location.reload();
+    }
+    
+    // Attempt to extract detail from the error message if it's JSON
+    try {
+      const match = error.message.match(/API Error \(\d+\): (.*)/);
+      if (match) {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.detail) {
+          throw new Error(parsed.detail);
+        }
+      }
+    } catch(e) {
+      if (e !== error) throw e;
+    }
+    
+    throw error;
   }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? "API error");
-  }
-  return res.json();
 }
 
 function parseBulkText(text) {
@@ -1732,24 +1747,35 @@ function AuthApp() {
         const formData = new URLSearchParams();
         formData.append("username", username);
         formData.append("password", password);
-        const res = await fetch(`${API}/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: formData
-        });
-        if (!res.ok) throw new Error("Invalid credentials");
-        const data = await res.json();
+        let data;
+        try {
+          data = await fetchApi(`${API}/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: formData
+          });
+        } catch (err) {
+          throw new Error("Invalid credentials");
+        }
         localStorage.setItem("token", data.access_token);
         window.location.reload();
       } else {
-        const res = await fetch(`${API}/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password })
-        });
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.detail || "Registration failed");
+        try {
+          await fetchApi(`${API}/register`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+        } catch (err) {
+          let msg = "Registration failed";
+          const match = err.message.match(/API Error \(\d+\): (.*)/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              if (parsed.detail) msg = parsed.detail;
+            } catch(e) {}
+          }
+          throw new Error(msg);
         }
         setIsLogin(true);
         setError("Registration successful! Please log in.");

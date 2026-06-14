@@ -67,6 +67,8 @@ Daily-Checklist/
 │   └── database.py
 ├── task-sorter/         ← Complete React app
 │   ├── src/
+│   │   ├── utils/
+│   │   │   └── api.js   ← Generic API fetch wrapper
 │   │   ├── App.jsx
 │   │   ├── main.jsx
 │   │   └── index.css
