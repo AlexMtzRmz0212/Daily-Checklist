@@ -34,8 +34,8 @@ echo [3/3] Launching Terminals...
 :: We use a small trick here: 
 :: Windows Terminal (wt) doesn't easily return the errorlevel of the sub-processes,
 :: so we rely on our pre-launch folder checks above.
-wt -w 0 nt --title "Backend" -d "." cmd /k "color 1F && .venv\Scripts\activate && uvicorn main:app --reload --port %BACKEND_PORT%" ; ^
-split-pane -V --title "Frontend" -d ".\%FRONTEND_DIR%" cmd /k "color 5F && npm run dev"
+wt -w 0 nt --title "Backend" -d "." cmd /k "color 1F && .venv\Scripts\activate && uvicorn backend.main:app --reload --port %BACKEND_PORT%" ; ^
+split-pane -V --title "Frontend" -d ".\%FRONTEND_DIR%" cmd /k "color 3F && npm run dev"
 
 :: Final check: If wt itself failed to launch
 if %ERRORLEVEL% neq 0 goto :FAIL_MSG
