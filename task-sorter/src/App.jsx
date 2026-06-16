@@ -689,7 +689,18 @@ function MainApp() {
               <div className="max-h-96 overflow-y-auto space-y-4">
                 <div>
                   <h3 className="text-cyan-400 text-sm font-black mb-2">📋 Action Plan</h3>
-                  <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">{aiPlanResult.plan_text}</p>
+                  <div className="text-sm leading-relaxed space-y-1">
+                    {(aiPlanResult.plan_text || "").split("\n").map((line, i) => {
+                      const trimmed = line.trim();
+                      if (!trimmed) return <div key={i} className="h-1" />;
+                      const isPhase = /^phase\b/i.test(trimmed);
+                      return isPhase ? (
+                        <p key={i} className="text-cyan-300 font-black mt-3">{trimmed}</p>
+                      ) : (
+                        <p key={i} className="text-gray-300 pl-3">{trimmed}</p>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div>
                   <h3 className="text-purple-400 text-sm font-black mb-2">🧠 Reasoning</h3>

@@ -619,19 +619,37 @@ async def ai_action_plan(request: SortRequest, current_user: models.User = Depen
             f" | Priority:{task.get('Priority',1)} Time:{task.get('Time_Minutes',30)}min"
         )
 
-    prompt = f"""Output ONLY a JSON object — no explanation, no markdown.
+    prompt = f"""Output ONLY a JSON object — no explanation, no markdown fences.
 
-Organize the tasks below into a strict chronological sequence with specific time blocks for today. If the total duration exceeds 8 hours (480 minutes), automatically move the lower-priority tasks into a future schedule array.
+Build an optimized step-by-step sequence for the tasks below. DO NOT use specific clock times — assign an estimated DURATION to each activity instead. Group activities into logical phases for maximum efficiency (e.g. room/home chores together, out-of-house errands together, prep/repair together). Keep it brief, direct, and scannable.
+
+If the total estimated duration exceeds 8 hours (480 minutes), move the lower-priority tasks into the future array and leave them out of the plan.
 
 Tasks:
 {chr(10).join(tasks_summary)}
 
+Write "plan_text" using EXACTLY this layout (plain text, use \\n for new lines):
+Phase 1: <Group Name> (~<total range> mins)
+<Activity>: <duration> mins (<short optional tip>).
+<Activity>: <duration> mins.
+
+Phase 2: <Group Name> (~<total range> mins)
+<Activity>: <duration> mins (<short optional tip>).
+
+Rules for plan_text:
+- Number phases sequentially and give each a short logical group name.
+- Show an estimated total duration range in each phase header.
+- One activity per line, each ending with its duration in mins.
+- Tips in parentheses are optional and must be very short (efficiency or sequencing hints only).
+- For errands that involve travel, you may add "+ travel" to that phase header.
+- No clock times anywhere. No markdown symbols like # or *.
+
 Respond with exactly this JSON and nothing else:
 {{
-  "sorted_task_ids": ["<array of IDs scheduled for today>"],
-  "future_task_ids": ["<array of IDs pushed to tomorrow>"],
-  "plan_text": "<Detailed chronological schedule string with time blocks for today's tasks>",
-  "reasoning": "<1 sentence explaining why tasks were sequenced this way and what was deferred>"
+  "sorted_task_ids": ["<array of IDs scheduled for today, in execution order>"],
+  "future_task_ids": ["<array of IDs deferred to a future day>"],
+  "plan_text": "<phase-grouped, duration-based plan formatted exactly as described above>",
+  "reasoning": "<1 short sentence explaining the grouping logic and what was deferred, if anything>"
 }}
 """
 
