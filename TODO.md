@@ -12,4 +12,4 @@
 
 
 - Important but not Relevant
-- Relevant but not Urgent
+- Relevant but not Urgent.
