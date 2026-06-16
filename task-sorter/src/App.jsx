@@ -288,14 +288,51 @@ function MainApp() {
     } catch (e) { setBulkError(e.message); setBulkPhase("error"); }
   };
 
+  const [evalMode, setEvalMode] = useState(false);
+  const [selectedTasks, setSelectedTasks] = useState(new Set());
+
+  const toggleEvalMode = () => {
+    if (evalMode) {
+      setEvalMode(false);
+      setSelectedTasks(new Set());
+    } else {
+      setEvalMode(true);
+      setSelectedTasks(new Set());
+    }
+  };
+
   const handleReeval = async () => {
     if (!tasks.length) return;
     setRevalPhase("loading"); setRevalError("");
     try {
-      const updated = await apiFetch("/tasks/reevaluate-all", { method: "POST" });
-      setTasks(updated); setLocalEdits({}); setRevalPhase("idle");
+      let updated;
+      if (selectedTasks.size > 0) {
+        updated = await apiFetch("/tasks/reevaluate-selected", {
+          method: "POST",
+          body: JSON.stringify({ task_ids: Array.from(selectedTasks) }),
+        });
+      } else {
+        updated = await apiFetch("/tasks/reevaluate-all", { method: "POST" });
+      }
+      setTasks((p) => {
+        const pMap = new Map(p.map(t => [t.Task_ID, t]));
+        updated.forEach(t => pMap.set(t.Task_ID, t));
+        return Array.from(pMap.values());
+      });
+      setLocalEdits({}); setRevalPhase("idle");
+      setEvalMode(false);
+      setSelectedTasks(new Set());
     } catch (e) { setRevalError(e.message); setRevalPhase("error"); }
   };
+
+  const toggleTaskSelection = useCallback((taskId) => {
+    setSelectedTasks(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
 
   const handleSort = async () => {
     const mergedTasks = tasks.map(merged);
@@ -819,12 +856,27 @@ function MainApp() {
               </motion.button>
 
               {/* #tag Re-evaluate Button */}
-              {/* <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
-                disabled={isRevaluating}
-                className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
-                style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
-                {isRevaluating ? <span className="flex items-center gap-2"><Spinner /> EVALUATING…</span> : "↺ RE-EVALUATE"}
-              </motion.button> */}
+              {evalMode ? (
+                <div className="flex items-center gap-2">
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleEvalMode}
+                    className="px-4 py-2.5 rounded-xl font-black text-sm tracking-wider uppercase text-gray-400 hover:text-white"
+                    style={{ background: "rgba(255,255,255,0.05)" }}>
+                    Cancel
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReeval}
+                    disabled={isRevaluating}
+                    className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
+                    style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
+                    {isRevaluating ? <span className="flex items-center gap-2"><Spinner /> EVALUATING…</span> : (selectedTasks.size > 0 ? `↺ EVALUATE (${selectedTasks.size})` : "↺ EVALUATE ALL")}
+                  </motion.button>
+                </div>
+              ) : (
+                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleEvalMode}
+                  className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase"
+                  style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
+                  ↺ EVALUATE
+                </motion.button>
+              )}
 
               {/* #tag Sort Button */}
               {tasks.length > 1 && (
@@ -862,6 +914,9 @@ function MainApp() {
                   onSubtaskToggled={handleSubtaskToggled}
                   onSubtaskDeleted={handleSubtaskDeleted}
                   prefersReduced={prefersReduced}
+                  evalMode={evalMode}
+                  isSelected={selectedTasks.has(task.Task_ID)}
+                  toggleSelection={toggleTaskSelection}
                 />
               ))}
             </AnimatePresence>
@@ -882,6 +937,9 @@ function MainApp() {
             onSubtaskAdded={handleSubtaskAdded}
             onSubtaskToggled={handleSubtaskToggled}
             onSubtaskDeleted={handleSubtaskDeleted}
+            evalMode={evalMode}
+            selectedTasks={selectedTasks}
+            toggleSelection={toggleTaskSelection}
           />
         )}
 
@@ -909,7 +967,7 @@ function formatMinutes(minutes) {
 // ─────────────────────────────────────────────────────────────────────────────
 //region TaskTable
 
-function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection }) {
   const [expandedTask, setExpandedTask] = useState(null);
 
   const SortIcon = ({ column }) => {
@@ -967,6 +1025,9 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
               onSubtaskAdded={onSubtaskAdded}
               onSubtaskToggled={onSubtaskToggled}
               onSubtaskDeleted={onSubtaskDeleted}
+              evalMode={evalMode}
+              isSelected={selectedTasks?.has(task.Task_ID)}
+              toggleSelection={toggleSelection}
             />
           ))}
         </tbody>
@@ -982,7 +1043,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
 //  TaskTableRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, propertyOrder, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted }) {
+function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, propertyOrder, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, isSelected, toggleSelection }) {
 
   const PropertyCell = ({ propKey }) => {
     const value = getVal(task, propKey);
@@ -1006,7 +1067,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
     }
 
     if (mode === "binary") {
-      const isYes = value === 10;
+      const isYes = value >= 5;
       return (
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <button
@@ -1039,13 +1100,19 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
 
   return (
     <>
-      <tr className="border-t border-white/5 hover:bg-white/[0.03] transition-colors">
-        {/* Rank — clickable to expand */}
-        <td className="px-4 py-3 text-center text-xs text-gray-600 cursor-pointer select-none" onClick={onToggleExpand}>
-          {index + 1}
+      <tr className={`border-t border-white/5 transition-colors cursor-pointer ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => evalMode ? toggleSelection(task.Task_ID) : onToggleExpand()}>
+        {/* Rank / Checkbox */}
+        <td className="px-4 py-3 text-center text-xs text-gray-600 select-none">
+          {evalMode ? (
+            <div className={`w-5 h-5 inline-flex items-center justify-center rounded border ${isSelected ? 'border-purple-500 bg-purple-500 text-white' : 'border-gray-600 text-transparent'}`}>
+              ✓
+            </div>
+          ) : (
+            index + 1
+          )}
         </td>
-        {/* Name — clickable to expand */}
-        <td className="px-4 py-3 cursor-pointer" onClick={onToggleExpand}>
+        {/* Name */}
+        <td className="px-4 py-3">
           <div>
             <div className="font-bold text-sm flex items-center gap-2">
               {task.Name}
@@ -1163,7 +1230,7 @@ function SubtaskAddInline({ taskId, onAdded }) {
 //  TaskCard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder,onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
+function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder,onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced, evalMode, isSelected, toggleSelection }) {
   const [expanded, setExpanded] = useState(false);
   const spring = { type: "spring", stiffness: 380, damping: 38 };
 
@@ -1178,12 +1245,24 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, pr
       animate={isExiting ? { opacity: 0, x: 120, scale: 0.92 } : { opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 120, scale: 0.9 }}
       transition={prefersReduced ? { duration: 0 } : { ...spring, layout: spring }}
-      className="mb-3 rounded-2xl overflow-hidden"
-      style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${heatColor}` }}>
+      className={`mb-3 rounded-2xl overflow-hidden transition-colors ${evalMode && isSelected ? "ring-2 ring-purple-500" : ""}`}
+      style={{ background: evalMode && isSelected ? "#1e1b4b" : "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${heatColor}` }}>
 
-      <div className="flex items-center gap-3 px-4 py-3.5 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
-        <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
-          style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
+      <div className="flex items-center gap-3 px-4 py-3.5 cursor-pointer" onClick={() => {
+        if (evalMode) {
+          toggleSelection(task.Task_ID);
+        } else {
+          setExpanded((v) => !v);
+        }
+      }}>
+        {evalMode ? (
+          <div className={`w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg border-2 ${isSelected ? 'border-purple-500 bg-purple-500' : 'border-gray-600'}`}>
+            {isSelected && <span className="text-white text-xs">✓</span>}
+          </div>
+        ) : (
+          <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
+            style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
+        )}
         
         <motion.button whileTap={{ scale: 0.7 }} onClick={(e) => { e.stopPropagation(); onComplete(task.Task_ID); }} title="Mark complete"
           className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
@@ -1209,6 +1288,24 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, pr
           {PREVIEW_PROPS.map((key) => {
             const prop = PROPERTIES.find((p) => p.key === key);
             const val  = getVal(task, key);
+            const isBinary = propertyModes[key] === "binary";
+            
+            if (isBinary) {
+              const isYes = val >= 5;
+              return (
+                <div key={key} title={`${key}: ${isYes ? 'Yes' : 'No'}`} 
+                  className="flex items-end justify-center flex-shrink-0 h-full"
+                  style={{ width: 4 }}>
+                  <motion.div 
+                    initial={false}
+                    animate={{ backgroundColor: isYes ? prop.bar : "rgba(255,255,255,0.1)" }}
+                    transition={{ duration: 0.2 }}
+                    style={{ width: 4, height: 4, borderRadius: 2, marginBottom: "2px" }}
+                  />
+                </div>
+              );
+            }
+
             return (
               <motion.div key={key} title={`${key}: ${val}`}
                 animate={{ height: `${val * 10}%` }} transition={{ type: "spring", stiffness: 300, damping: 28 }}

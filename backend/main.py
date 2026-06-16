@@ -108,6 +108,9 @@ class TaskUpdate(BaseModel):
 class SortRequest(BaseModel):
     tasks: List[Dict[str, Any]]
 
+class ReevaluateRequest(BaseModel):
+    task_ids: List[str]
+
 class PostponeRequest(BaseModel):
     reason: str = ""
 
@@ -352,6 +355,11 @@ async def _score_task(name: str, context: str, user: models.User) -> Dict[str, A
     result["Time_Minutes"] = clamp_minutes(metrics.get("Time_Minutes"))
     return result
 
+async def _score_tasks_bulk(tasks: List[Any], user: models.User) -> List[Dict[str, Any]]:
+    return await asyncio.gather(
+        *[_score_task(t.Name, t.Context, user) for t in tasks]
+    )
+
 def _normalize_time_for_sorting(time_minutes: int) -> float:
     if time_minutes <= 0:
         return 0.1
@@ -545,9 +553,11 @@ async def evaluate_task(task: TaskCreate, db: Session = Depends(get_db), current
 
 @app.post("/tasks/evaluate-bulk")
 async def evaluate_bulk(payload: TaskBulkCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
-    async def score_one(item: TaskBulkItem) -> models.Task:
-        metrics = await _score_task(item.Name, item.Context, current_user)
-        return models.Task(
+    metrics_list = await _score_tasks_bulk(payload.tasks, current_user)
+    
+    new_tasks = []
+    for item, metrics in zip(payload.tasks, metrics_list):
+        task = models.Task(
             Task_ID=str(uuid.uuid4()),
             user_id=current_user.id,
             Name=item.Name,
@@ -556,12 +566,10 @@ async def evaluate_bulk(payload: TaskBulkCreate, db: Session = Depends(get_db), 
             Subtasks=[],
             **metrics
         )
-    
-    new_tasks = list(await asyncio.gather(*[score_one(item) for item in payload.tasks]))
-    for task in new_tasks:
+        new_tasks.append(task)
         db.add(task)
+        
     db.commit()
-    
     for task in new_tasks:
         db.refresh(task)
     
@@ -573,16 +581,38 @@ async def reevaluate_all(db: Session = Depends(get_db), current_user: models.Use
     if not active_tasks:
         return []
     
-    async def rescore(task: models.Task):
-        metrics = await _score_task(task.Name, task.Context or "", current_user)
-        for k, v in metrics.items():
-            setattr(task, k, v)
-        return task
-
-    await asyncio.gather(*[rescore(t) for t in active_tasks])
+    chunk_size = 15
+    for i in range(0, len(active_tasks), chunk_size):
+        chunk = active_tasks[i:i + chunk_size]
+        items = [TaskBulkItem(Name=t.Name, Context=t.Context or "") for t in chunk]
+        metrics_list = await _score_tasks_bulk(items, current_user)
+        for task, metrics in zip(chunk, metrics_list):
+            for k, v in metrics.items():
+                setattr(task, k, v)
+                
     db.commit()
-    
     return [_task_to_dict(t) for t in active_tasks]
+
+@app.post("/tasks/reevaluate-selected")
+async def reevaluate_selected(request: ReevaluateRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    if not request.task_ids:
+        return []
+        
+    tasks_to_eval = db.query(models.Task).filter(models.Task.user_id == current_user.id, models.Task.Task_ID.in_(request.task_ids)).all()
+    if not tasks_to_eval:
+        return []
+        
+    chunk_size = 15
+    for i in range(0, len(tasks_to_eval), chunk_size):
+        chunk = tasks_to_eval[i:i + chunk_size]
+        items = [TaskBulkItem(Name=t.Name, Context=t.Context or "") for t in chunk]
+        metrics_list = await _score_tasks_bulk(items, current_user)
+        for task, metrics in zip(chunk, metrics_list):
+            for k, v in metrics.items():
+                setattr(task, k, v)
+                
+    db.commit()
+    return [_task_to_dict(t) for t in tasks_to_eval]
 
 @app.post("/tasks/sort")
 async def sort_tasks(request: SortRequest) -> Dict:
