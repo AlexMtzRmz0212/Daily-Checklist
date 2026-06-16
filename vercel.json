@@ -13,7 +13,6 @@
   ],
   "routes": [
     { "src": "/api/(.*)", "dest": "backend/main.py" },
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/index.html" }
+    { "src": "/(.*)", "dest": "/task-sorter/$1" }
   ]
 }
