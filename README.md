@@ -128,6 +128,13 @@ Daily-Checklist/
 
 ---
 
+## Deployment & Database
+
+- **Frontend Hosting:** Deployed via **Vercel** as a live page on my website at [checklist.bittobyte.qzz.io](https://checklist.bittobyte.qzz.io).
+- **Database:** Uses **Neon** for Serverless Postgres database management.
+
+---
+
 ## Customisation
 
 | What | Where |

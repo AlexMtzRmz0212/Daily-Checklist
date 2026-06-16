@@ -37,6 +37,10 @@ const result = await fetchApi("/tasks/evaluate", {
 });
 ```
 
+## Deployment
+
+This frontend is deployed via **Vercel** as a live page on my website at [checklist.bittobyte.qzz.io](https://checklist.bittobyte.qzz.io).
+
 ## Running Locally
 
 To run the frontend development server:
