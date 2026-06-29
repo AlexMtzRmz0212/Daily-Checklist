@@ -93,7 +93,6 @@ function MainApp() {
   const [propertyModes, setPropertyModes]   = useState({});
   const [modeSavePhase, setModeSavePhase]   = useState("idle");
 
-  const [showAIPlanModal, setShowAIPlanModal] = useState(false);
   const [aiPlanResult, setAIPlanResult]       = useState(null);
   const [aiPlanPhase, setAiPlanPhase]         = useState("idle");
   const [aiPlanError, setAiPlanError]         = useState("");
@@ -368,7 +367,7 @@ function MainApp() {
       setTasks(result.sorted_ids.map((id) => byId[id]).filter(Boolean));
       setLocalEdits({});
       setAIPlanResult(result);
-      setShowAIPlanModal(true);
+      setViewMode("ai-plan");
     } catch (e) {
       setAiPlanError(e.message);
     } finally {
@@ -703,52 +702,6 @@ function MainApp() {
         )}
       </AnimatePresence>
 
-      {/* AI Plan modal */}
-      <AnimatePresence>
-        {showAIPlanModal && aiPlanResult && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[70] flex items-center justify-center"
-            style={{ background: "rgba(2,6,23,0.95)", backdropFilter: "blur(8px)" }}
-            onClick={() => setShowAIPlanModal(false)}>
-            <motion.div
-              initial={{ scale: 0.85, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.85, opacity: 0, y: 24 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="w-full max-w-2xl mx-4 rounded-2xl p-6"
-              style={{ background: "#0f172a", border: "1px solid rgba(6,182,212,0.3)" }}
-              onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-black" style={{
-                  background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 100%)",
-                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-                }}>🤖 AI Action Plan</h2>
-                <button onClick={() => setShowAIPlanModal(false)} className="text-gray-600 hover:text-gray-400">✕</button>
-              </div>
-              <div className="max-h-96 overflow-y-auto space-y-4">
-                <div>
-                  <h3 className="text-cyan-400 text-sm font-black mb-2">📋 Action Plan</h3>
-                  <div className="text-sm leading-relaxed space-y-1">
-                    {(aiPlanResult.plan_text || "").split("\n").map((line, i) => {
-                      const trimmed = line.trim();
-                      if (!trimmed) return <div key={i} className="h-1" />;
-                      const isPhase = /^phase\b/i.test(trimmed);
-                      return isPhase ? (
-                        <p key={i} className="text-cyan-300 font-black mt-3">{trimmed}</p>
-                      ) : (
-                        <p key={i} className="text-gray-300 pl-3">{trimmed}</p>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-purple-400 text-sm font-black mb-2">🧠 Reasoning</h3>
-                  <p className="text-gray-400 text-sm leading-relaxed">{aiPlanResult.reasoning}</p>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Main */}
       <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 py-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
         <header className="mb-10 text-center">
@@ -830,31 +783,21 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {["card", "table"].map(mode => (
+                {[["card", "📋 Cards"], ["table", "📊 Table"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => (
                   <button key={mode} onClick={() => setViewMode(mode)}
                     className={`px-3 py-1.5 rounded-md text-[10px] font-black tracking-wider uppercase transition-all ${
-                      viewMode === mode ? "text-cyan-400" : "text-gray-600 hover:text-gray-400"
+                      viewMode === mode
+                        ? mode === "ai-plan" ? "text-purple-400" : "text-cyan-400"
+                        : "text-gray-600 hover:text-gray-400"
                     }`}
-                    style={{ background: viewMode === mode ? "rgba(6,182,212,0.15)" : "transparent" }}>
-                    {mode === "card" ? "📋 Cards" : "📊 Table"}
+                    style={{ background: viewMode === mode ? (mode === "ai-plan" ? "rgba(139,92,246,0.15)" : "rgba(6,182,212,0.15)") : "transparent" }}>
+                    {label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              {aiPlanError && (
-                <p className="text-red-400 text-xs">⚠ {aiPlanError}</p>
-              )}
-
-              {/* #tag AI Plan Button */}
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
-                onClick={handleAIPlan} disabled={aiPlanPhase === "loading"}
-                className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
-                style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
-                {aiPlanPhase === "loading" ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span> : "🤖 AI PLAN"}
-              </motion.button>
-
+            {viewMode !== "ai-plan" && <div className="flex items-center gap-2 flex-wrap">
               {/* #tag Re-evaluate Button */}
               {evalMode ? (
                 <div className="flex items-center gap-2">
@@ -883,10 +826,10 @@ function MainApp() {
                 <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleSort}
                   className="px-8 py-2.5 rounded-xl font-black text-sm tracking-[0.2em] uppercase"
                   style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", fontFamily: "inherit" }}>
-                  ⚡SORT
+                  ⚡SORT/💾SAVE
                 </motion.button>
               )}
-            </div>
+            </div>}
           </div>
         )}
 
@@ -894,7 +837,15 @@ function MainApp() {
         {sortError && <p className="text-red-400 text-xs mb-3">⚠ Sort failed: {sortError}</p>}
 
         {/* Task display */}
-        {viewMode === "card" ? (
+        {viewMode === "ai-plan" ? (
+          <AIPlanTab
+            aiPlanResult={aiPlanResult}
+            aiPlanPhase={aiPlanPhase}
+            aiPlanError={aiPlanError}
+            onGenerate={handleAIPlan}
+            hasTasks={tasks.length > 0}
+          />
+        ) : viewMode === "card" ? (
           <LayoutGroup>
             <AnimatePresence mode="popLayout">
               {sortedTasks.map((task, index) => (
@@ -906,7 +857,7 @@ function MainApp() {
                   getVal={getVal}
                   adjustProp={adjustProp}
                   propertyModes={propertyModes}
-                  propertyOrder={propertyOrder} 
+                  propertyOrder={propertyOrder}
                   onComplete={handleComplete}
                   onDelete={handleDelete}
                   onPostpone={openPostpone}
@@ -943,7 +894,7 @@ function MainApp() {
           />
         )}
 
-        {tasks.length === 0 && (
+        {tasks.length === 0 && viewMode !== "ai-plan" && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
             <p className="text-6xl mb-5">📋</p>
             <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
@@ -956,6 +907,94 @@ function MainApp() {
 }
 
 //endregion
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  AIPlanTab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTasks }) {
+  const isLoading = aiPlanPhase === "loading";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}
+      className="rounded-2xl p-6"
+      style={{ background: "#0f172a", border: "1px solid rgba(139,92,246,0.25)" }}>
+
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-black" style={{
+          background: "linear-gradient(135deg,#a78bfa 0%,#22d3ee 100%)",
+          WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+        }}>🤖 AI Action Plan</h2>
+        <motion.button
+          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
+          onClick={onGenerate}
+          disabled={isLoading || !hasTasks}
+          className="px-5 py-2 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
+          style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
+          {isLoading
+            ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span>
+            : aiPlanResult ? "↺ REGENERATE" : "⚡ GENERATE PLAN"}
+        </motion.button>
+      </div>
+
+      {aiPlanError && (
+        <p className="text-red-400 text-xs mb-4">⚠ {aiPlanError}</p>
+      )}
+
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-16 gap-6">
+          <SpinRing color="purple" />
+          <div className="text-center">
+            <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Building Plan</p>
+            <p className="text-gray-600 text-xs tracking-widest">analyzing task relationships…</p>
+          </div>
+        </div>
+      )}
+
+      {!isLoading && !aiPlanResult && (
+        <div className="text-center py-20">
+          <p className="text-5xl mb-4">🤖</p>
+          <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No plan yet</p>
+          <p className="text-gray-700 text-xs mt-2">
+            {hasTasks ? "Click Generate Plan to have AI create an action plan for your tasks." : "Add tasks first, then generate a plan."}
+          </p>
+        </div>
+      )}
+
+      {!isLoading && aiPlanResult && (
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-cyan-400 text-xs font-black tracking-widest uppercase mb-3">📋 Action Plan</h3>
+            <div className="rounded-xl p-4 text-sm leading-relaxed space-y-1"
+              style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+              {(aiPlanResult.plan_text || "").split("\n").map((line, i) => {
+                const trimmed = line.trim();
+                if (!trimmed) return <div key={i} className="h-2" />;
+                const isPhase = /^phase\b/i.test(trimmed);
+                return isPhase ? (
+                  <p key={i} className="text-cyan-300 font-black mt-4 first:mt-0">{trimmed}</p>
+                ) : (
+                  <p key={i} className="text-gray-300 pl-3">{trimmed}</p>
+                );
+              })}
+            </div>
+          </div>
+
+          {aiPlanResult.reasoning && (
+            <div>
+              <h3 className="text-purple-400 text-xs font-black tracking-widest uppercase mb-3">🧠 Reasoning</h3>
+              <div className="rounded-xl p-4"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <p className="text-gray-400 text-sm leading-relaxed">{aiPlanResult.reasoning}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+}
 
 function formatMinutes(minutes) {
   if (minutes < 60)   return `${minutes}min`;

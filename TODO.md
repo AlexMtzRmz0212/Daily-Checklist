@@ -11,7 +11,6 @@ Project Description
 - [ ] Tab of table of hierarchy vs priority, taking them out of other tabs  
 - [ ] Instead of graphic of bars on cards tab -> a tab for graphic representation of properties  
 - [ ] Turn Cards tab to subtasks creation tab ("Subtasks")  
-- [ ] Separate AI Plan to another tab  
 - [ ] Diff, Prio, Hie -> deffault to scale  
 - [ ] Consider Effort as property  
 - [ ] Add the option to disable a property for a specific task  
@@ -24,4 +23,5 @@ Project Description
 
 ### Done ✓
 
+- [x] Separate AI Plan to another tab  
 
