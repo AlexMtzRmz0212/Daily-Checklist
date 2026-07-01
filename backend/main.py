@@ -21,13 +21,14 @@ from pydantic                   import BaseModel, Field
 from dotenv                     import load_dotenv
 from sqlalchemy.orm             import Session
 
-from . import models, database, auth
+from . import models, database, auth, notion
 from .database import engine, get_db
 
 load_dotenv()
 
-# Create tables
+# Create tables, then patch in any columns added to existing databases.
 models.Base.metadata.create_all(bind=engine)
+database.ensure_columns()
 
 app = FastAPI(title="AI Task Sorter", version="1.2.0")
 
@@ -54,9 +55,13 @@ MODEL: str = os.getenv("MODEL", "anthropic/claude-3.5-sonnet")
 SITE_URL: str = "http://localhost:5173"
 SITE_NAME: str = "AI Task Sorter"
 
+# Priority & Hierarchy are managed in the Matrix tab: always scale, 1 = highest.
+# They are intentionally kept out of DEFAULT_PROPERTY_ORDER (the reorderable display list).
+MATRIX_PROPS: set = {"Priority", "Hierarchy"}
+
 DEFAULT_PROPERTY_MODES: Dict[str, str] = {
-    "Priority":    "binary",
-    "Hierarchy":   "binary",
+    "Priority":    "scale",
+    "Hierarchy":   "scale",
     "Time_Minutes": "scale",
     "Difficulty":  "binary",
     "Relevance":   "binary",
@@ -64,14 +69,12 @@ DEFAULT_PROPERTY_MODES: Dict[str, str] = {
     "Importance":  "binary",
 }
 
-DEFAULT_PROPERTY_ORDER: List[str] = [ 
-    "Urgency", 
-    "Importance", 
+DEFAULT_PROPERTY_ORDER: List[str] = [
+    "Urgency",
+    "Importance",
     "Relevance",
-    "Difficulty", 
-    "Priority", 
-    "Hierarchy", 
-    "Time_Minutes"
+    "Difficulty",
+    "Time_Minutes",
 ]
 
 TIME_PRESETS = [5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 480, 960, 1440]
@@ -95,8 +98,8 @@ class TaskBulkCreate(BaseModel):
 class TaskUpdate(BaseModel):
     Name: Optional[str] = None
     Context: Optional[str] = None
-    Priority: Optional[int] = Field(None, ge=1, le=10)
-    Hierarchy: Optional[int] = Field(None, ge=1, le=10)
+    Priority: Optional[int] = Field(None, ge=1)          # matrix row (priority level); grows unbounded
+    Hierarchy: Optional[int] = Field(None, ge=1, le=10)  # matrix column; fixed to reach 10
     Time_Minutes: Optional[int] = Field(None, ge=1)
     Difficulty: Optional[int] = Field(None, ge=1, le=10)
     Relevance: Optional[int] = Field(None, ge=1, le=10)
@@ -104,6 +107,7 @@ class TaskUpdate(BaseModel):
     Importance: Optional[int] = Field(None, ge=1, le=10)
     Status: Optional[str] = None
     Subtasks: Optional[List[Dict[str, Any]]] = None
+    Parent_ID: Optional[str] = None
 
 class SortRequest(BaseModel):
     tasks: List[Dict[str, Any]]
@@ -140,6 +144,14 @@ class Token(BaseModel):
 class ApiKeyUpdate(BaseModel):
     api_key: str
 
+class NotionConfig(BaseModel):
+    token: Optional[str] = None                          # omit/blank to keep existing token
+    database_id: str = ""
+    property_map: Optional[Dict[str, str]] = None        # override Notion column names
+
+class NotionImportRequest(BaseModel):
+    score_new: bool = True                               # AI-score newly imported tasks
+
 #endregion
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,10 +166,15 @@ def get_user_settings(user: models.User) -> Dict:
         for prop, mode in DEFAULT_PROPERTY_MODES.items():
             if prop not in config["property_modes"]:
                 config["property_modes"][prop] = mode
-    
+    # Matrix props are always scale — coerce any legacy 'binary' setting.
+    for prop in MATRIX_PROPS:
+        config["property_modes"][prop] = "scale"
+
     if "property_order" not in config:
         config["property_order"] = DEFAULT_PROPERTY_ORDER.copy()
     else:
+        # Drop matrix props from a legacy stored order, then append any new display props.
+        config["property_order"] = [p for p in config["property_order"] if p not in MATRIX_PROPS]
         existing = set(config["property_order"])
         for prop in DEFAULT_PROPERTY_ORDER:
             if prop not in existing:
@@ -165,8 +182,27 @@ def get_user_settings(user: models.User) -> Dict:
     
     if "model" not in config:
         config["model"] = MODEL
-        
+
     return config
+
+# Optional global Notion fallback (mirrors GLOBAL_OPENROUTER_API_KEY).
+GLOBAL_NOTION_TOKEN: str = os.getenv("NOTION_TOKEN", "")
+NOTION_VERSION: str = os.getenv("NOTION_VERSION", notion.DEFAULT_VERSION)
+
+def get_notion_config(user: models.User) -> Dict[str, Any]:
+    """
+    Read the user's stored Notion settings and return a resolved config.
+    The decrypted token is never sent to the client — only `connected` is exposed.
+    """
+    raw = (user.settings or {}).get("notion", {}) if user.settings else {}
+    token = auth.decrypt_api_key(raw.get("encrypted_token")) or GLOBAL_NOTION_TOKEN
+    return {
+        "token": token,
+        "database_id": raw.get("database_id", ""),
+        "property_map": {**notion.DEFAULT_PROP_MAP, **(raw.get("property_map") or {})},
+        "version": raw.get("version", NOTION_VERSION),
+        "connected": bool(token and raw.get("database_id")),
+    }
 
 #endregion
 
@@ -230,8 +266,10 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
         return text
     except json.JSONDecodeError:
         pass
-    BINARY_FIELDS = {"Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"}
-    ALL_FIELDS    = BINARY_FIELDS | {"Time_Minutes"}
+    # Priority/Hierarchy are scale-only (1=highest); the rest may be binary yes/no.
+    BINARY_FIELDS = {"Difficulty", "Relevance", "Urgency", "Importance"}
+    SCALE_FIELDS  = {"Priority", "Hierarchy"}
+    ALL_FIELDS    = BINARY_FIELDS | SCALE_FIELDS | {"Time_Minutes"}
     reconstructed: Dict[str, int] = {}
     for key, value in re.findall(r'"([^"]+)"\s*:\s*([0-9]+(?:\.[0-9]*)?)', text):
         if key in ALL_FIELDS:
@@ -246,6 +284,8 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
         return None
     for field in BINARY_FIELDS:
         reconstructed.setdefault(field, 0)
+    for field in SCALE_FIELDS:
+        reconstructed.setdefault(field, 5)
     reconstructed.setdefault("Time_Minutes", 30)
     return json.dumps(reconstructed)
 
@@ -290,8 +330,8 @@ Return exactly this structure (no extra text before or after):
 }}
 
 Scoring rubric:
-{'• Priority:    0=not a priority, 1=is a priority' if property_modes.get('Priority') == 'binary' else '• Priority:    1=trivial, 10=mission-critical'}
-{'• Hierarchy:   0=no dependencies, 1=blocks other work' if property_modes.get('Hierarchy') == 'binary' else '• Hierarchy:   1=standalone, 10=many tasks depend on this'}
+• Priority:    1=highest priority (do first), 10=lowest priority
+• Hierarchy:   1=highest (top-level goal / blocks the most work), 10=lowest (leaf / depends on others)
 • Time_Minutes: Estimate real time in minutes. Use one of: 5,10,15,30,45,60,90,120,180,240,480,960,1440
 {'• Difficulty:  0=easy/straightforward, 1=challenging/complex' if property_modes.get('Difficulty') == 'binary' else '• Difficulty:  1=trivial, 10=requires deep expertise'}
 {'• Relevance:   0=not relevant to goals, 1=directly relevant' if property_modes.get('Relevance') == 'binary' else '• Relevance:   1=tangential, 10=core to primary goals'}
@@ -305,7 +345,7 @@ async def _score_task(name: str, context: str, user: models.User) -> Dict[str, A
     property_modes = config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
 
     _DEFAULTS: Dict[str, Any] = {
-        "Priority": 10, "Hierarchy": 10, "Difficulty": 10,
+        "Priority": 5, "Hierarchy": 5, "Difficulty": 10,
         "Relevance": 10, "Urgency": 10, "Importance": 10,
         "Time_Minutes": 60,
     }
@@ -380,7 +420,9 @@ def _task_to_dict(task: models.Task) -> Dict:
         "Importance": task.Importance,
         "Postponed_Until": task.Postponed_Until,
         "Postpone_Reason": task.Postpone_Reason,
-        "Subtasks": task.Subtasks or []
+        "Subtasks": task.Subtasks or [],
+        "Parent_ID": task.Parent_ID,
+        "Notion_Page_ID": task.Notion_Page_ID,
     }
 
 async def _reactivate_due_postponed(tasks: List[models.Task], user: models.User, db: Session) -> List[Dict]:
@@ -482,6 +524,8 @@ def set_property_modes(config: PropertyModeConfig, db: Session = Depends(get_db)
             raise HTTPException(status_code=400, detail=f"Invalid mode for {prop}: {mode}")
         if prop == "Time_Minutes" and mode != "scale":
             raise HTTPException(status_code=400, detail="Time_Minutes must always be scale mode")
+        if prop in MATRIX_PROPS and mode != "scale":
+            raise HTTPException(status_code=400, detail=f"{prop} is managed in the Matrix tab and must be scale mode")
     
     app_config = get_user_settings(current_user)
     app_config["property_modes"] = config.property_modes
@@ -496,11 +540,11 @@ def get_property_order(current_user: models.User = Depends(auth.get_current_user
 
 @app.post("/config/property-order")
 def set_property_order(config: PropertyOrderConfig, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
-    valid_props = set(DEFAULT_PROPERTY_MODES.keys())
+    valid_props = set(DEFAULT_PROPERTY_MODES.keys()) - MATRIX_PROPS
     ordered = config.property_order
     if set(ordered) != valid_props:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Property order must contain exactly: {sorted(valid_props)}"
         )
     
@@ -523,10 +567,182 @@ def set_model(config: ModelConfig, db: Session = Depends(get_db), current_user: 
     db.commit()
     return {"message": "Model updated", "model": config.model}
 
+@app.get("/config/notion")
+def get_notion_settings(current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    cfg = get_notion_config(current_user)
+    return {
+        "connected": cfg["connected"],
+        "database_id": cfg["database_id"],
+        "property_map": cfg["property_map"],
+        "default_property_map": notion.DEFAULT_PROP_MAP,
+    }
+
+@app.post("/config/notion")
+def set_notion_settings(config: NotionConfig, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    settings = dict(current_user.settings or {})
+    existing = dict(settings.get("notion", {}))
+
+    # Only replace the stored token when a new non-blank one is provided.
+    if config.token and config.token.strip():
+        existing["encrypted_token"] = auth.encrypt_api_key(config.token.strip())
+    existing["database_id"] = config.database_id.strip()
+    if config.property_map is not None:
+        existing["property_map"] = config.property_map
+
+    settings["notion"] = existing
+    current_user.settings = settings
+    db.commit()
+
+    cfg = get_notion_config(current_user)
+    return {"message": "Notion settings saved", "connected": cfg["connected"]}
+
+#endregion
+
+# ─────────────────────────────────────────────────────────────────────────────
+#region Notion Sync Routes
+
+def _clamp_1_10(value: Any) -> Optional[int]:
+    """Coerce a Notion number into the app's 1–10 integer scale (None stays None)."""
+    if value is None:
+        return None
+    try:
+        return max(1, min(10, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+def _notion_status_to_app(status: str) -> str:
+    return "Completed" if status.strip().lower() in ("done", "complete", "completed") else "Active"
+
+@app.post("/notion/import")
+async def notion_import(request: NotionImportRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    cfg = get_notion_config(current_user)
+    if not cfg["connected"]:
+        raise HTTPException(status_code=400, detail="Notion is not configured. Add a token and database ID in Settings.")
+
+    try:
+        pages = await notion.fetch_all_pages(cfg["token"], cfg["version"], cfg["database_id"])
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"Notion API error: {exc.response.status_code} {exc.response.text}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Notion: {exc}")
+
+    parsed = [notion.parse_page(p, cfg["property_map"]) for p in pages]
+
+    # Existing tasks for this user keyed by their Notion page id.
+    existing_by_notion = {
+        t.Notion_Page_ID: t
+        for t in db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+        if t.Notion_Page_ID
+    }
+
+    imported: List[models.Task] = []
+    new_tasks: List[models.Task] = []
+    notion_to_local: Dict[str, models.Task] = {}
+
+    for pg in parsed:
+        h = _clamp_1_10(pg["hierarchy"])
+        p = _clamp_1_10(pg["priority"])
+        task = existing_by_notion.get(pg["notion_id"])
+        if task:
+            task.Name = pg["title"]
+            task.Context = pg["description"] or task.Context or ""
+            task.Status = _notion_status_to_app(pg["status"])
+            if h is not None:
+                task.Hierarchy = h
+            if p is not None:
+                task.Priority = p
+        else:
+            task = models.Task(
+                Task_ID=str(uuid.uuid4()),
+                user_id=current_user.id,
+                Name=pg["title"],
+                Context=pg["description"] or "",
+                Status=_notion_status_to_app(pg["status"]),
+                Subtasks=[],
+                Notion_Page_ID=pg["notion_id"],
+                Hierarchy=h if h is not None else 5,
+                Priority=p if p is not None else 5,
+            )
+            db.add(task)
+            new_tasks.append(task)
+        notion_to_local[pg["notion_id"]] = task
+        imported.append(task)
+
+    # Resolve parent relations to local tasks (first parent that maps wins).
+    parent_of = {pg["notion_id"]: pg["parent_ids"] for pg in parsed}
+    for notion_id, task in notion_to_local.items():
+        for pid in parent_of.get(notion_id, []):
+            parent_task = notion_to_local.get(pid)
+            if parent_task and parent_task is not task:
+                task.Parent_ID = parent_task.Task_ID
+                break
+
+    # Optionally fill the app-only properties for brand-new tasks via the existing scorer,
+    # then re-apply Notion's own Hierarchy/Priority where it provided them.
+    if request.score_new and new_tasks:
+        notion_hp = {
+            pg["notion_id"]: (_clamp_1_10(pg["hierarchy"]), _clamp_1_10(pg["priority"]))
+            for pg in parsed
+        }
+        chunk_size = 15
+        for i in range(0, len(new_tasks), chunk_size):
+            chunk = new_tasks[i:i + chunk_size]
+            items = [TaskBulkItem(Name=t.Name, Context=t.Context or "") for t in chunk]
+            metrics_list = await _score_tasks_bulk(items, current_user)
+            for t, metrics in zip(chunk, metrics_list):
+                for k, v in metrics.items():
+                    setattr(t, k, v)
+                nh, np_ = notion_hp.get(t.Notion_Page_ID, (None, None))
+                if nh is not None:
+                    t.Hierarchy = nh
+                if np_ is not None:
+                    t.Priority = np_
+
+    db.commit()
+    for t in imported:
+        db.refresh(t)
+
+    return {
+        "imported": [_task_to_dict(t) for t in imported],
+        "created": len(new_tasks),
+        "updated": len(imported) - len(new_tasks),
+    }
+
+@app.post("/notion/export")
+async def notion_export(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    cfg = get_notion_config(current_user)
+    if not cfg["connected"]:
+        raise HTTPException(status_code=400, detail="Notion is not configured. Add a token and database ID in Settings.")
+
+    linked = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id,
+        models.Task.Notion_Page_ID.isnot(None),
+    ).all()
+
+    pushed, failures = 0, []
+    for t in linked:
+        try:
+            await notion.update_page_properties(
+                cfg["token"], cfg["version"], t.Notion_Page_ID,
+                cfg["property_map"], t.Hierarchy, t.Priority,
+            )
+            pushed += 1
+        except Exception as exc:
+            failures.append({"Task_ID": t.Task_ID, "error": str(exc)})
+
+    return {"pushed": pushed, "failed": len(failures), "failures": failures}
+
 #endregion
 
 # ─────────────────────────────────────────────────────────────────────────────
 #region Tasks Routes
+
+@app.get("/tasks/all")
+def get_all_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    """Every task for the user regardless of status — used by the Tree view so parent
+    tasks stay visible even when Completed or Postponed."""
+    tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+    return [_task_to_dict(t) for t in tasks]
 
 @app.get("/tasks")
 async def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
@@ -623,8 +839,8 @@ async def sort_tasks(request: SortRequest) -> Dict:
         time_normalized = _normalize_time_for_sorting(t.get("Time_Minutes", 30))
         return (
             -(t.get("Urgency", 1) * t.get("Importance", 1)),
-            -t.get("Hierarchy", 1),
-            -t.get("Priority", 1),
+            t.get("Hierarchy", 10),   # 1 = highest, so ascending
+            t.get("Priority", 10),    # 1 = highest, so ascending
             time_normalized,
             -t.get("Relevance", 1),
         )
@@ -642,11 +858,11 @@ async def ai_action_plan(request: SortRequest, current_user: models.User = Depen
     for i, task in enumerate(request.tasks, 1):
         u_label = "YES" if task.get("Urgency", 1)    == 10 else "NO"
         i_label = "YES" if task.get("Importance", 1) == 10 else "NO"
-        h_label = "YES" if task.get("Hierarchy", 1)  == 10 else "NO"
         tasks_summary.append(
             f'{i}. ID:"{task["Task_ID"]}" | {task["Name"]}'
-            f" | Urgent:{u_label} Important:{i_label} Blocking:{h_label}"
-            f" | Priority:{task.get('Priority',1)} Time:{task.get('Time_Minutes',30)}min"
+            f" | Urgent:{u_label} Important:{i_label}"
+            f" | Hierarchy:{task.get('Hierarchy',10)} Priority:{task.get('Priority',10)}"
+            f" (1=highest) | Time:{task.get('Time_Minutes',30)}min"
         )
 
     prompt = f"""Output ONLY a JSON object — no explanation, no markdown fences.
@@ -717,8 +933,8 @@ Respond with exactly this JSON and nothing else:
         def sort_key(t: Dict) -> tuple:
             return (
                 -(t.get("Urgency", 1) * t.get("Importance", 1)),
-                -t.get("Hierarchy", 1),
-                -t.get("Priority", 1),
+                t.get("Hierarchy", 10),   # 1 = highest, so ascending
+                t.get("Priority", 10),    # 1 = highest, so ascending
                 _normalize_time_for_sorting(t.get("Time_Minutes", 30)),
                 -t.get("Relevance", 1),
             )

@@ -6,9 +6,8 @@ Project Description
 
 ### Todo
 
-- [ ] Check sort button  
+- [ ] Check sort button to explain what it does  
 - [ ] Freeze title row  
-- [ ] Tab of table of hierarchy vs priority, taking them out of other tabs  
 - [ ] Instead of graphic of bars on cards tab -> a tab for graphic representation of properties  
 - [ ] Turn Cards tab to subtasks creation tab ("Subtasks")  
 - [ ] Diff, Prio, Hie -> deffault to scale  
@@ -23,5 +22,6 @@ Project Description
 
 ### Done ✓
 
+- [x] Tab of table of hierarchy vs priority, taking them out of other tabs  
 - [x] Separate AI Plan to another tab  
 

@@ -16,7 +16,12 @@ const PROPERTIES = [
   { key: "Time_Minutes",  label: "TIME (min)", hex: "#60a5fa", bar: "#3b82f6" },
 ];
 
-const PREVIEW_PROPS = ["Urgency", "Importance", "Priority", "Relevance", "Difficulty", "Hierarchy", "Time_Minutes"];
+// Priority & Hierarchy are managed in the Matrix tab; keep them out of the other views.
+const MATRIX_PROP_KEYS = ["Priority", "Hierarchy"];
+const SCORING_PROPS = PROPERTIES.filter((p) => !MATRIX_PROP_KEYS.includes(p.key));
+const SCORING_PROP_KEYS = SCORING_PROPS.map((p) => p.key);
+
+const PREVIEW_PROPS = ["Urgency", "Importance", "Relevance", "Difficulty", "Time_Minutes"];
 
 async function apiFetch(path, options = {}) {
   const token = localStorage.getItem("token");
@@ -97,7 +102,23 @@ function MainApp() {
   const [aiPlanPhase, setAiPlanPhase]         = useState("idle");
   const [aiPlanError, setAiPlanError]         = useState("");
 
-  const [propertyOrder, setPropertyOrder] = useState(PROPERTIES.map(p => p.key));
+  const [propertyOrder, setPropertyOrder] = useState(SCORING_PROP_KEYS);
+
+  // Notion sync
+  const [notionToken, setNotionToken]         = useState("");
+  const [notionDbId, setNotionDbId]           = useState("");
+  const [notionConnected, setNotionConnected] = useState(false);
+  const [notionPhase, setNotionPhase]         = useState("idle"); // idle | saving | importing | exporting
+  const [notionError, setNotionError]         = useState("");
+  const [notionMsg, setNotionMsg]             = useState("");
+  const [treeRefresh, setTreeRefresh]         = useState(0);       // bump to re-fetch the tree
+
+  useEffect(() => {
+    apiFetch("/config/notion").then(data => {
+      setNotionConnected(data.connected);
+      setNotionDbId(data.database_id || "");
+    }).catch(console.error);
+  }, []);
 
   useEffect(() => {
     apiFetch("/config/properties").then(data => {
@@ -107,7 +128,7 @@ function MainApp() {
 
   useEffect(() => {
     apiFetch("/config/property-order").then(data => {
-      if (data.property_order?.length === PROPERTIES.length) {
+      if (data.property_order?.length === SCORING_PROP_KEYS.length) {
         setPropertyOrder(data.property_order);
       }
     }).catch(console.error);
@@ -256,6 +277,61 @@ function MainApp() {
     } catch (e) {
       setApiKeyError(e.message);
       setApiKeySavePhase("error");
+    }
+  };
+
+  const handleSaveNotion = async () => {
+    if (!notionDbId.trim()) { setNotionError("Database ID is required."); return; }
+    setNotionPhase("saving"); setNotionError(""); setNotionMsg("");
+    try {
+      const res = await apiFetch("/config/notion", {
+        method: "POST",
+        body: JSON.stringify({ token: notionToken.trim(), database_id: notionDbId.trim() }),
+      });
+      setNotionConnected(res.connected);
+      setNotionToken(""); // never keep the token in the field
+      setNotionMsg(res.connected ? "Notion connected." : "Saved — add a token to connect.");
+      setNotionPhase("idle");
+    } catch (e) { setNotionError(e.message); setNotionPhase("idle"); }
+  };
+
+  const handleNotionImport = async () => {
+    setNotionPhase("importing"); setNotionError(""); setNotionMsg("");
+    try {
+      const res = await apiFetch("/notion/import", {
+        method: "POST",
+        body: JSON.stringify({ score_new: true }),
+      });
+      const fresh = await apiFetch("/tasks");
+      setTasks(fresh);
+      setTreeRefresh((n) => n + 1);
+      setNotionMsg(`Imported ${res.created} new, updated ${res.updated}.`);
+      setNotionPhase("idle");
+    } catch (e) { setNotionError(e.message); setNotionPhase("idle"); }
+  };
+
+  const handleNotionExport = async () => {
+    setNotionPhase("exporting"); setNotionError(""); setNotionMsg("");
+    try {
+      const res = await apiFetch("/notion/export", { method: "POST" });
+      setNotionMsg(`Pushed scores for ${res.pushed} task(s)` + (res.failed ? `, ${res.failed} failed.` : "."));
+      setNotionPhase("idle");
+    } catch (e) { setNotionError(e.message); setNotionPhase("idle"); }
+  };
+
+  const handleMatrixPersist = async (changed) => {
+    // Optimistically update local state, then persist the new coordinates.
+    setTasks((prev) => prev.map((t) => {
+      const u = changed.find((c) => c.Task_ID === t.Task_ID);
+      return u ? { ...t, Hierarchy: u.Hierarchy, Priority: u.Priority } : t;
+    }));
+    try {
+      await apiFetch("/tasks/bulk-update", {
+        method: "POST",
+        body: JSON.stringify(changed),
+      });
+    } catch (e) {
+      console.error("Matrix save failed:", e);
     }
   };
 
@@ -550,6 +626,9 @@ function MainApp() {
                     Binary = default · Drag to reorder
                   </span>
                 </div>
+                <p className="text-[10px] text-gray-600 mb-3">
+                  Hierarchy &amp; Priority live in the <span className="text-amber-400">🎯 Matrix</span> tab now — always scale, 1 = highest.
+                </p>
                 <DndProvider>
                   <ReorderablePropertyList
                     propertyOrder={propertyOrder}
@@ -581,6 +660,67 @@ function MainApp() {
                   style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>
                   {modeSavePhase === "loading" ? "SAVING…" : "💾 SAVE MODES"}
                 </motion.button>
+              </div>
+
+              {/* Notion Sync */}
+              <div className="mb-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <label className="text-[10px] font-black tracking-widest text-gray-600 uppercase">
+                    Notion Sync
+                  </label>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full font-black"
+                    style={{ background: notionConnected ? "rgba(52,211,153,0.15)" : "rgba(148,163,184,0.15)",
+                             color: notionConnected ? "#34d399" : "#94a3b8",
+                             border: `1px solid ${notionConnected ? "rgba(52,211,153,0.3)" : "rgba(148,163,184,0.3)"}` }}>
+                    {notionConnected ? "● Connected" : "○ Not connected"}
+                  </span>
+                </div>
+
+                <input
+                  type="password"
+                  value={notionToken} onChange={(e) => setNotionToken(e.target.value)}
+                  placeholder={notionConnected ? "Integration token (leave blank to keep current)" : "secret_..."}
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all mb-2"
+                  style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
+                  onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
+                  onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
+                <div className="flex gap-2">
+                  <input
+                    value={notionDbId} onChange={(e) => setNotionDbId(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSaveNotion()}
+                    placeholder="Database ID"
+                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all"
+                    style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
+                    onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
+                    onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                    onClick={handleSaveNotion} disabled={notionPhase !== "idle" || !notionDbId.trim()}
+                    className="px-4 rounded-xl font-black text-xs disabled:opacity-40"
+                    style={{ background: "rgba(6,182,212,0.15)", border: "1px solid rgba(6,182,212,0.3)", color: "#22d3ee" }}>
+                    {notionPhase === "saving" ? "..." : "SAVE"}
+                  </motion.button>
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }}
+                    onClick={handleNotionImport} disabled={notionPhase !== "idle" || !notionConnected}
+                    className="flex-1 py-2 rounded-xl font-black text-xs tracking-widest disabled:opacity-40"
+                    style={{ background: "rgba(52,211,153,0.12)", border: "1px solid rgba(52,211,153,0.3)", color: "#34d399" }}>
+                    {notionPhase === "importing" ? <span className="flex items-center justify-center gap-2"><Spinner /> IMPORTING…</span> : "⬇ IMPORT"}
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.96 }}
+                    onClick={handleNotionExport} disabled={notionPhase !== "idle" || !notionConnected}
+                    className="flex-1 py-2 rounded-xl font-black text-xs tracking-widest disabled:opacity-40"
+                    style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>
+                    {notionPhase === "exporting" ? <span className="flex items-center justify-center gap-2"><Spinner /> PUSHING…</span> : "⬆ PUSH SCORES"}
+                  </motion.button>
+                </div>
+
+                {notionError && <p className="text-red-400 text-xs mt-2">⚠ {notionError}</p>}
+                {notionMsg   && <p className="text-emerald-400 text-xs mt-2">{notionMsg}</p>}
+                <p className="text-[10px] text-gray-600 mt-2">
+                  Your token is encrypted. Import pulls tasks + parent tree; Push writes Hierarchy/Priority back.
+                </p>
               </div>
 
               {modelError && <p className="text-red-400 text-xs mb-4">⚠ {modelError}</p>}
@@ -783,21 +923,23 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["card", "📋 Cards"], ["table", "📊 Table"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => (
+                {[["card", "📋 Cards"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
+                  const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : "text-cyan-400";
+                  const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : "rgba(6,182,212,0.15)";
+                  return (
                   <button key={mode} onClick={() => setViewMode(mode)}
                     className={`px-3 py-1.5 rounded-md text-[10px] font-black tracking-wider uppercase transition-all ${
-                      viewMode === mode
-                        ? mode === "ai-plan" ? "text-purple-400" : "text-cyan-400"
-                        : "text-gray-600 hover:text-gray-400"
+                      viewMode === mode ? accentText : "text-gray-600 hover:text-gray-400"
                     }`}
-                    style={{ background: viewMode === mode ? (mode === "ai-plan" ? "rgba(139,92,246,0.15)" : "rgba(6,182,212,0.15)") : "transparent" }}>
+                    style={{ background: viewMode === mode ? accentBg : "transparent" }}>
                     {label}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {viewMode !== "ai-plan" && <div className="flex items-center gap-2 flex-wrap">
+            {viewMode !== "ai-plan" && viewMode !== "tree" && viewMode !== "matrix" && <div className="flex items-center gap-2 flex-wrap">
               {/* #tag Re-evaluate Button */}
               {evalMode ? (
                 <div className="flex items-center gap-2">
@@ -845,6 +987,10 @@ function MainApp() {
             onGenerate={handleAIPlan}
             hasTasks={tasks.length > 0}
           />
+        ) : viewMode === "tree" ? (
+          <TreeView refreshSignal={treeRefresh} />
+        ) : viewMode === "matrix" ? (
+          <MatrixView tasks={tasks} onPersist={handleMatrixPersist} />
         ) : viewMode === "card" ? (
           <LayoutGroup>
             <AnimatePresence mode="popLayout">
@@ -894,7 +1040,7 @@ function MainApp() {
           />
         )}
 
-        {tasks.length === 0 && viewMode !== "ai-plan" && (
+        {tasks.length === 0 && viewMode !== "ai-plan" && viewMode !== "tree" && viewMode !== "matrix" && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
             <p className="text-6xl mb-5">📋</p>
             <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
@@ -1004,6 +1150,347 @@ function formatMinutes(minutes) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//region TreeView
+
+// Colour per level (1 = highest → hottest). Used for matrix priority rows.
+const LEVEL_COLORS = {
+  1: "#ef4444", 2: "#f87171", 3: "#fb923c", 4: "#f59e0b", 5: "#eab308",
+  6: "#94a3b8", 7: "#38bdf8", 8: "#3b82f6", 9: "#6366f1", 10: "#8b5cf6",
+};
+const hierColor = (h) => LEVEL_COLORS[h] || "#f472b6";
+
+// Mirror of the backend build_tree / get_leaves logic, in JS.
+function buildTree(tasks) {
+  const nodeMap = new Map(tasks.map((t) => [t.Task_ID, { ...t, children: [] }]));
+  const roots = [];
+  for (const node of nodeMap.values()) {
+    const pid = node.Parent_ID;
+    if (pid && nodeMap.has(pid) && pid !== node.Task_ID) {
+      nodeMap.get(pid).children.push(node.Task_ID);
+    } else {
+      roots.push(node.Task_ID);
+    }
+  }
+  return { nodeMap, roots };
+}
+
+function StatusPill({ status }) {
+  const color = status === "Completed" ? "#34d399" : status === "Postponed" ? "#fbbf24" : "#22d3ee";
+  return (
+    <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider"
+      style={{ background: `${color}1f`, color, border: `1px solid ${color}55` }}>
+      {status}
+    </span>
+  );
+}
+
+function TreeNode({ id, nodeMap, depth }) {
+  const [open, setOpen] = useState(depth === 0);
+  const task = nodeMap.get(id);
+  if (!task) return null;
+  const isLeaf = task.children.length === 0;
+
+  return (
+    <div style={{ marginLeft: depth === 0 ? 0 : 16 }}>
+      <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/5 transition-colors">
+        {isLeaf ? (
+          <span className="text-gray-600 text-xs w-4 text-center">◾</span>
+        ) : (
+          <button onClick={() => setOpen((o) => !o)} className="text-gray-500 hover:text-white text-xs w-4 text-center">
+            {open ? "▾" : "▸"}
+          </button>
+        )}
+        <span className={`text-sm ${isLeaf ? "text-gray-300" : "text-white font-bold"}`}>
+          {isLeaf ? "" : "📁 "}{task.Name}
+        </span>
+        <StatusPill status={task.Status} />
+        {!isLeaf && <span className="text-[10px] text-gray-600">{task.children.length}</span>}
+      </div>
+      {!isLeaf && open && (
+        <div className="border-l border-white/5 ml-2">
+          {task.children.map((cid) => (
+            <TreeNode key={cid} id={cid} nodeMap={nodeMap} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TreeView({ refreshSignal }) {
+  const [tasks, setTasks]   = useState([]);
+  const [phase, setPhase]   = useState("loading"); // loading | ready | error
+  const [error, setError]   = useState("");
+
+  const load = useCallback(() => {
+    setPhase("loading"); setError("");
+    apiFetch("/tasks/all")
+      .then((data) => { setTasks(data); setPhase("ready"); })
+      .catch((e) => { setError(e.message); setPhase("error"); });
+  }, []);
+
+  useEffect(() => { load(); }, [load, refreshSignal]);
+
+  if (phase === "loading") {
+    return <div className="text-center py-24 text-gray-500 text-sm flex items-center justify-center gap-3"><Spinner /> Loading tree…</div>;
+  }
+  if (phase === "error") {
+    return <div className="text-center py-24 text-red-400 text-sm">⚠ {error}</div>;
+  }
+  if (!tasks.length) {
+    return (
+      <div className="text-center py-24">
+        <p className="text-6xl mb-5">🌲</p>
+        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No tasks yet</p>
+        <p className="text-gray-700 text-xs mt-2">Import from Notion (⚙️ Settings) or add tasks to grow the tree.</p>
+      </div>
+    );
+  }
+
+  const { nodeMap, roots } = buildTree(tasks);
+  const leaves = [...nodeMap.values()].filter((n) => n.children.length === 0);
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest">{tasks.length} tasks · {leaves.length} leaves</p>
+        <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
+      </div>
+
+      {/* Full tree */}
+      <section>
+        <h3 className="text-emerald-400 text-xs font-black tracking-widest uppercase mb-3">🌲 Full Tree</h3>
+        <div className="rounded-xl p-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+          {roots.map((rid) => (
+            <TreeNode key={rid} id={rid} nodeMap={nodeMap} depth={0} />
+          ))}
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+//endregion
+
+// ─────────────────────────────────────────────────────────────────────────────
+//region MatrixView (Priority × Hierarchy)
+
+// The matrix is one ordered list wrapped into a fixed 10-wide grid: reading
+// left→right, top→bottom is the flattened priority order. Row = Priority, Column =
+// Hierarchy (fixed 1..10). When a row fills, the list wraps to the next priority row.
+// 1 = highest for both → top-left is the best cell.
+
+const MATRIX_COLS = 10; // Hierarchy is fixed to reach 10.
+const cellKey = (r, c) => `${r},${c}`;
+const clamp1 = (v) => Math.max(1, Math.round(Number(v) || 1));
+
+// Next cell in flattened (row-major) order — wraps to the next row after column 10.
+const nextCell = (r, c) => (c < MATRIX_COLS ? { r, c: c + 1 } : { r: r + 1, c: 1 });
+
+// Deterministic, collision-free layout from each task's stored Priority/Hierarchy.
+// Ties/collisions cascade forward through the flattened list (wrapping at column 10).
+function resolvePlacements(tasks) {
+  const ordered = [...tasks].sort((a, b) => {
+    const pa = clamp1(a.Priority), pb = clamp1(b.Priority);
+    if (pa !== pb) return pa - pb;
+    const ha = clamp1(a.Hierarchy), hb = clamp1(b.Hierarchy);
+    if (ha !== hb) return ha - hb;
+    return (a.Name || "").localeCompare(b.Name || "");
+  });
+
+  const occupied = new Set();
+  const placements = {}; // Task_ID -> { row, col } = { Priority, Hierarchy }
+  for (const t of ordered) {
+    let row = clamp1(t.Priority);
+    let col = Math.min(MATRIX_COLS, clamp1(t.Hierarchy));
+    while (occupied.has(cellKey(row, col))) ({ r: row, c: col } = nextCell(row, col));
+    occupied.add(cellKey(row, col));
+    placements[t.Task_ID] = { row, col };
+  }
+  return placements;
+}
+
+// Insert `taskId` at (r,c), cascading any occupant forward through the list. Mutates `pos`.
+function placeWithCascade(pos, taskId, r, c) {
+  const occupant = Object.keys(pos).find(
+    (id) => id !== taskId && pos[id].row === r && pos[id].col === c
+  );
+  if (occupant) {
+    const n = nextCell(r, c);
+    placeWithCascade(pos, occupant, n.r, n.c);
+  }
+  pos[taskId] = { row: r, col: c };
+}
+
+function MatrixChip({ task, accent, onDragStart, dragging }) {
+  return (
+    <div
+      draggable
+      onDragStart={(e) => onDragStart(e, task.Task_ID)}
+      title={task.Name}
+      className="rounded-lg px-2 py-1.5 cursor-grab active:cursor-grabbing select-none transition-opacity"
+      style={{
+        background: `${accent}1f`,
+        border: `1px solid ${accent}66`,
+        opacity: dragging ? 0.35 : 1,
+      }}
+    >
+      <p className="text-[11px] leading-tight text-gray-100 font-semibold line-clamp-2">{task.Name}</p>
+    </div>
+  );
+}
+
+function MatrixView({ tasks, onPersist }) {
+  const [draggingId, setDraggingId] = useState(null);
+  const [hoverCell, setHoverCell]   = useState(null);
+
+  const placements = resolvePlacements(tasks);
+  const byId = new Map(tasks.map((t) => [t.Task_ID, t]));
+
+  let maxRow = 1;
+  for (const id in placements) maxRow = Math.max(maxRow, placements[id].row);
+  // Hierarchy is fixed at 10 columns; one spare priority row so a task can always be
+  // dropped into a brand-new priority level (rows grow, columns do not).
+  const rows = maxRow + 1;
+  const cols = MATRIX_COLS;
+
+  const taskAt = (r, c) =>
+    Object.keys(placements).find((id) => placements[id].row === r && placements[id].col === c);
+
+  // row = Priority, col = Hierarchy → build the persisted payload accordingly.
+  const diffChanged = (pos) => {
+    const changed = [];
+    for (const t of tasks) {
+      const p = pos[t.Task_ID];
+      if (p && (p.row !== t.Priority || p.col !== t.Hierarchy)) {
+        changed.push({ Task_ID: t.Task_ID, Priority: p.row, Hierarchy: p.col });
+      }
+    }
+    return changed;
+  };
+
+  const onDragStart = (e, id) => {
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggingId(id);
+  };
+
+  const onDrop = (e, r, c) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain") || draggingId;
+    setDraggingId(null);
+    setHoverCell(null);
+    if (!id) return;
+
+    const pos = {};
+    for (const k in placements) pos[k] = { ...placements[k] };
+    delete pos[id];
+    placeWithCascade(pos, id, r, c);
+
+    const changed = diffChanged(pos);
+    if (changed.length) onPersist(changed);
+  };
+
+  // Pack the flattened list with no gaps: read the current layout in row-major order,
+  // then reassign consecutive positions (row = Priority group of 10, col = Hierarchy 1..10).
+  const handleCompact = () => {
+    const orderedIds = Object.keys(placements).sort((a, b) => {
+      const pa = placements[a], pb = placements[b];
+      return pa.row - pb.row || pa.col - pb.col;
+    });
+    const pos = {};
+    orderedIds.forEach((id, i) => {
+      pos[id] = { row: Math.floor(i / MATRIX_COLS) + 1, col: (i % MATRIX_COLS) + 1 };
+    });
+    const changed = diffChanged(pos);
+    if (changed.length) onPersist(changed);
+  };
+
+  if (!tasks.length) {
+    return (
+      <div className="text-center py-24">
+        <p className="text-6xl mb-5">🎯</p>
+        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
+        <p className="text-gray-700 text-xs mt-2">Add tasks — the AI seeds their Priority &amp; Hierarchy, then drag to arrange.</p>
+      </div>
+    );
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest">
+          One list, wrapped at 10 · reads left→right, top→bottom · drag to reposition
+        </p>
+        <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+          onClick={handleCompact}
+          className="px-4 py-2 rounded-xl font-black text-xs tracking-widest uppercase"
+          style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.35)", color: "#fbbf24", fontFamily: "inherit" }}>
+          ⇲ Compact
+        </motion.button>
+      </div>
+
+      <div className="overflow-auto rounded-xl" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+        <table className="border-collapse" style={{ minWidth: cols * 168 }}>
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-10 p-2" style={{ background: "#0b1220" }}></th>
+              {Array.from({ length: cols }, (_, i) => i + 1).map((c) => (
+                <th key={c} className="p-2 text-[10px] font-black tracking-widest uppercase text-gray-500 text-center"
+                  style={{ minWidth: 160 }}>
+                  Hierarchy {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: rows }, (_, i) => i + 1).map((r) => {
+              const accent = hierColor(Math.min(10, r));
+              return (
+                <tr key={r}>
+                  <th className="sticky left-0 z-10 p-2 text-[10px] font-black tracking-widest uppercase text-center"
+                    style={{ background: "#0b1220", color: accent, minWidth: 88 }}>
+                    Prio {r}
+                  </th>
+                  {Array.from({ length: cols }, (_, i) => i + 1).map((c) => {
+                    const id = taskAt(r, c);
+                    const task = id ? byId.get(id) : null;
+                    const isHover = hoverCell === cellKey(r, c);
+                    return (
+                      <td key={c}
+                        onDragOver={(e) => { e.preventDefault(); setHoverCell(cellKey(r, c)); }}
+                        onDragLeave={() => setHoverCell((h) => (h === cellKey(r, c) ? null : h))}
+                        onDrop={(e) => onDrop(e, r, c)}
+                        className="align-top p-1.5 transition-colors"
+                        style={{
+                          border: "1px solid rgba(255,255,255,0.04)",
+                          background: isHover ? "rgba(34,211,238,0.10)" : "transparent",
+                          minWidth: 160, height: 60,
+                        }}>
+                        {task && (
+                          <MatrixChip
+                            task={task}
+                            accent={accent}
+                            dragging={draggingId === id}
+                            onDragStart={onDragStart}
+                          />
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </motion.div>
+  );
+}
+
+//endregion
+
+// ─────────────────────────────────────────────────────────────────────────────
 //region TaskTable
 
 function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection }) {
@@ -1028,7 +1515,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
           <tr>
             <th className="w-10 px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
             <TableHeader column="Name" label="Task" />
-            {(propertyOrder || PROPERTIES.map(p => p.key)).map(key => {
+            {(propertyOrder || SCORING_PROP_KEYS).map(key => {
               const prop = PROPERTIES.find(p => p.key === key);
               if (!prop) return null;
               // Shorten labels for table
@@ -1166,7 +1653,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
         </td>
 
         {/* Property cells — all stop propagation internally */}
-        {(propertyOrder || PROPERTIES.map(p => p.key))
+        {(propertyOrder || SCORING_PROP_KEYS)
         .map(key => PROPERTIES.find(p => p.key === key))
         .filter(Boolean)
         .map(({ key }) => (
@@ -1378,7 +1865,7 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, pr
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: "easeInOut" }}
             className="overflow-hidden" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
             <div className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {(propertyOrder || PROPERTIES.map(p => p.key))
+              {(propertyOrder || SCORING_PROP_KEYS)
                 .map(key => PROPERTIES.find(p => p.key === key))
                 .filter(Boolean)
                 .map(({ key, label, hex, bar }) => (

@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
 
@@ -42,3 +42,31 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_columns() -> None:
+    """
+    Lightweight, dependency-free migration.
+
+    `Base.metadata.create_all` creates missing tables but never adds columns to an
+    existing table. When the schema gains a column (e.g. Parent_ID, Notion_Page_ID),
+    older databases won't have it. This inspects the live `tasks` table and issues a
+    plain `ALTER TABLE ... ADD COLUMN` for anything missing. `ADD COLUMN` is supported
+    by both SQLite and PostgreSQL, which is all this app targets.
+    """
+    expected = {
+        "Parent_ID": "VARCHAR",
+        "Notion_Page_ID": "VARCHAR",
+    }
+    inspector = inspect(engine)
+    if "tasks" not in inspector.get_table_names():
+        return  # create_all will build it fresh with all columns
+
+    existing = {col["name"] for col in inspector.get_columns("tasks")}
+    missing = {name: ddl for name, ddl in expected.items() if name not in existing}
+    if not missing:
+        return
+
+    with engine.begin() as conn:
+        for name, ddl in missing.items():
+            conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{name}" {ddl}'))
