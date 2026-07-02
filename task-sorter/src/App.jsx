@@ -80,7 +80,7 @@ function MainApp() {
   const [preSortSnapshot, setPreSortSnapshot]       = useState([]);
   const [exitingIds, setExitingIds] = useState(new Set());
 
-  const [viewMode, setViewMode]         = useState("subtasks");
+  const [viewMode, setViewMode]         = useState("stats");
   const [sortColumn, setSortColumn]     = useState(null);
   const [sortDirection, setSortDirection] = useState("asc");
 
@@ -150,6 +150,8 @@ function MainApp() {
   const [addError, setAddError] = useState("");
 
   const [inputMode, setInputMode]   = useState("single");
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const addPanelRef = useRef(null);
   const [bulkText, setBulkText]     = useState("");
   const [bulkPhase, setBulkPhase]   = useState("idle");
   const [bulkError, setBulkError]   = useState("");
@@ -174,6 +176,18 @@ function MainApp() {
     }).catch(console.error);
     apiFetch("/tasks").then(setTasks).catch(console.error);
   }, []);
+
+  // Collapse the add-task panel when clicking outside of it.
+  useEffect(() => {
+    if (!addPanelOpen) return;
+    const onDown = (e) => {
+      if (addPanelRef.current && !addPanelRef.current.contains(e.target)) {
+        setAddPanelOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [addPanelOpen]);
 
   const getVal = useCallback(
     (task, key) => localEdits[task.Task_ID]?.[key] ?? task[key],
@@ -239,7 +253,7 @@ function MainApp() {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortColumn(column);
-      setSortDirection("asc");
+      setSortDirection("desc");
     }
   };
 
@@ -532,14 +546,16 @@ function MainApp() {
 
       {/* Top Right Controls */}
       <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
-        <motion.button
-          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          onClick={() => { localStorage.removeItem("token"); window.location.reload(); }}
-          className="px-3 h-10 rounded-xl flex items-center justify-center font-black text-xs tracking-widest"
-          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", backdropFilter: "blur(8px)" }}
-          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-          LOGOUT
-        </motion.button>
+        {tasks.length > 1 && (
+          <motion.button
+            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+            onClick={handleSort} disabled={isSorting}
+            className="px-6 h-10 rounded-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
+            style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
+            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+            {isSorting ? <span className="flex items-center gap-2"><Spinner /> SORTING…</span> : "⚡SORT/💾SAVE"}
+          </motion.button>
+        )}
         <motion.button
           initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
           onClick={() => setShowConfigModal(true)}
@@ -547,6 +563,15 @@ function MainApp() {
           style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(6,182,212,0.3)", backdropFilter: "blur(8px)" }}
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
           <span className="text-lg">⚙️</span>
+        </motion.button>
+        <motion.button
+          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+          onClick={() => { localStorage.removeItem("token"); window.location.reload(); }}
+          title="Log out"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm opacity-50 hover:opacity-100 transition-opacity"
+          style={{ background: "rgba(15,23,42,0.6)", border: "1px solid rgba(255,255,255,0.08)", color: "#64748b", backdropFilter: "blur(8px)" }}
+          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          ⎋
         </motion.button>
       </div>
 
@@ -858,15 +883,28 @@ function MainApp() {
 
       {/* Main */}
       <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 py-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
-        <header className="mb-10 text-center">
-          <h1 className="text-5xl font-black tracking-tight mb-1" style={{
+        <header className="mb-4 text-center">
+          <h1 className="text-2xl font-black tracking-tight" style={{
             background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 50%,#f472b6 100%)",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>DAILY CHECKLIST SORTER</h1>
         </header>
 
         {/* Add panel */}
-        <section className="mb-6 rounded-2xl p-5" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <section ref={addPanelRef} className="mb-6 rounded-2xl" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <button onClick={() => setAddPanelOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-5 py-3 text-left">
+            <span className="text-[11px] font-black tracking-widest uppercase text-cyan-400">＋ Add tasks</span>
+            <motion.span animate={{ rotate: addPanelOpen ? 90 : 0 }} transition={{ duration: 0.2 }}
+              className="text-gray-500 text-sm inline-block">▸</motion.span>
+          </button>
+          <AnimatePresence initial={false}>
+          {addPanelOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25 }}
+            style={{ overflow: "hidden" }}>
+          <div className="px-5 pb-5">
           <div className="flex items-center gap-1 mb-4">
             {["single", "bulk"].map((mode) => (
               <button key={mode} onClick={() => setInputMode(mode)}
@@ -927,6 +965,10 @@ function MainApp() {
               {bulkPhase === "error" && <p className="text-red-400 text-xs">⚠ {bulkError}</p>}
             </div>
           )}
+          </div>
+          </motion.div>
+          )}
+          </AnimatePresence>
         </section>
 
         {/* Controls bar */}
@@ -937,7 +979,7 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["stats", "📈 Stats"], ["subtasks", "✅ Subtasks"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
+                {[["table", "📊 Table"], ["subtasks", "✅ Subtasks"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
                   const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : "text-cyan-400";
                   const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : "rgba(6,182,212,0.15)";
                   return (
@@ -974,15 +1016,6 @@ function MainApp() {
                   className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase"
                   style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
                   ↺ EVALUATE
-                </motion.button>
-              )}
-
-              {/* #tag Sort Button */}
-              {tasks.length > 1 && (
-                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleSort}
-                  className="px-8 py-2.5 rounded-xl font-black text-sm tracking-[0.2em] uppercase"
-                  style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", fontFamily: "inherit" }}>
-                  ⚡SORT/💾SAVE
                 </motion.button>
               )}
             </div>}
@@ -1545,18 +1578,18 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
   };
 
   const TableHeader = ({ column, label }) => (
-    <th onClick={() => onSort(column)} className="px-4 py-3 text-left text-[10px] font-black tracking-wider uppercase cursor-pointer hover:text-cyan-400 transition-colors"
-      style={{ color: sortColumn === column ? "#22d3ee" : "#64748b", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+    <th onClick={() => onSort(column)} className="sticky top-0 z-10 px-4 py-3 text-left text-[10px] font-black tracking-wider uppercase cursor-pointer hover:text-cyan-400 transition-colors"
+      style={{ color: sortColumn === column ? "#22d3ee" : "#64748b", background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
       {label} <SortIcon column={column} />
     </th>
   );
 
   return (
-    <div className="rounded-2xl overflow-x-auto" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+    <div className="rounded-2xl overflow-auto max-h-[70vh]" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
       <table className="w-full min-w-[1000px]">
         <thead>
           <tr>
-            <th className="w-10 px-4 py-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
+            <th className="sticky top-0 z-10 w-10 px-4 py-3" style={{ background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
             <TableHeader column="Name" label="Task" />
             {(propertyOrder || SCORING_PROP_KEYS).map(key => {
               const prop = PROPERTIES.find(p => p.key === key);
@@ -1573,7 +1606,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
               };
               return <TableHeader key={key} column={key} label={shortLabels[key] || prop.label} />;
             })}
-            <th className="px-4 py-3 w-24" style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
+            <th className="sticky top-0 z-10 px-4 py-3 w-24" style={{ background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
           </tr>
         </thead>
         <tbody>
@@ -1882,6 +1915,14 @@ function StatsView({ tasks, getVal }) {
     { label: "Low",      color: "#22d3ee", n: heats.filter((h) => h < 3).length },
   ];
 
+  // ── Chart data ──
+  const scoreProps = PROPERTIES.filter((p) => ["Urgency", "Importance", "Relevance", "Difficulty"].includes(p.key));
+  const topByTime = [...tasks]
+    .filter((t) => (getVal(t, "Time_Minutes") || 0) > 0)
+    .sort((a, b) => (getVal(b, "Time_Minutes") || 0) - (getVal(a, "Time_Minutes") || 0))
+    .slice(0, 6);
+  const maxTime = topByTime.length ? (getVal(topByTime[0], "Time_Minutes") || 0) : 0;
+
   const StatTile = ({ label, value, sub, color }) => (
     <div className="rounded-2xl px-4 py-3 flex flex-col gap-0.5"
       style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1934,6 +1975,100 @@ function StatsView({ tasks, getVal }) {
         <StatTile label="Avg Relevance" value={fmtAvg(avgOf("Relevance"))} sub="out of 10" color="#34d399" />
         <StatTile label="Avg Difficulty" value={fmtAvg(avgOf("Difficulty"))} sub="out of 10" color="#c084fc" />
       </div>
+
+      {/* ── Charts ── */}
+      {count > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {/* Average score by property */}
+          <div className="rounded-2xl px-5 py-4" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-4">Average Score by Property</p>
+            <div className="flex flex-col gap-3">
+              {scoreProps.map((p) => {
+                const v = avgOf(p.key);
+                return (
+                  <div key={p.key} className="flex items-center gap-3">
+                    <span className="text-[10px] font-black tracking-wider uppercase w-24 shrink-0" style={{ color: p.hex }}>{p.label}</span>
+                    <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${(v / 10) * 100}%` }}
+                        transition={{ type: "spring", stiffness: 120, damping: 20 }}
+                        style={{ height: "100%", background: p.bar, borderRadius: 9999 }} />
+                    </div>
+                    <span className="text-xs font-mono font-bold w-8 text-right" style={{ color: p.hex }}>{fmtAvg(v)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Priority mix donut */}
+          <div className="rounded-2xl px-5 py-4 flex items-center gap-5" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="shrink-0">
+              <svg width="120" height="120" viewBox="0 0 120 120">
+                <g transform="rotate(-90 60 60)">
+                  {(() => {
+                    const r = 46, C = 2 * Math.PI * r;
+                    let offset = 0;
+                    return bands.filter((b) => b.n > 0).map((b) => {
+                      const frac = b.n / count;
+                      const seg = (
+                        <motion.circle key={b.label} cx="60" cy="60" r={r} fill="none"
+                          stroke={b.color} strokeWidth="16"
+                          initial={{ strokeDasharray: `0 ${C}` }}
+                          animate={{ strokeDasharray: `${frac * C} ${C}` }}
+                          transition={{ duration: 0.5 }}
+                          strokeDashoffset={-offset} />
+                      );
+                      offset += frac * C;
+                      return seg;
+                    });
+                  })()}
+                </g>
+                <text x="60" y="58" textAnchor="middle" fill="#f8fafc" style={{ fontSize: 22, fontWeight: 900 }}>{count}</text>
+                <text x="60" y="74" textAnchor="middle" fill="#64748b" style={{ fontSize: 8, letterSpacing: 1 }}>TASKS</text>
+              </svg>
+            </div>
+            <div className="flex-1">
+              <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-3">Priority Mix</p>
+              <div className="flex flex-col gap-1.5">
+                {bands.map((b) => (
+                  <div key={b.label} className="flex items-center gap-2 text-[11px]">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: b.color }} />
+                    <span className="text-gray-400 flex-1">{b.label}</span>
+                    <span className="font-mono font-bold" style={{ color: b.color }}>{b.n}</span>
+                    <span className="text-gray-600 w-9 text-right">{count ? Math.round((b.n / count) * 100) : 0}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Time distribution — longest tasks */}
+          <div className="rounded-2xl px-5 py-4 lg:col-span-2" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-4">Longest Tasks by Time</p>
+            {topByTime.length === 0 ? (
+              <p className="text-xs text-gray-600">No timed tasks yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {topByTime.map((t) => {
+                  const mins = getVal(t, "Time_Minutes") || 0;
+                  const w = maxTime ? (mins / maxTime) * 100 : 0;
+                  return (
+                    <div key={t.Task_ID} className="flex items-center gap-3">
+                      <span className="text-[11px] text-gray-300 w-40 shrink-0 truncate">{t.Name}</span>
+                      <div className="flex-1 h-2.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
+                        <motion.div initial={{ width: 0 }} animate={{ width: `${w}%` }}
+                          transition={{ type: "spring", stiffness: 120, damping: 20 }}
+                          style={{ height: "100%", background: "#3b82f6", borderRadius: 9999 }} />
+                      </div>
+                      <span className="text-xs font-mono font-bold text-blue-400 w-14 text-right">{formatMinutes(mins)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
