@@ -21,8 +21,6 @@ const MATRIX_PROP_KEYS = ["Priority", "Hierarchy"];
 const SCORING_PROPS = PROPERTIES.filter((p) => !MATRIX_PROP_KEYS.includes(p.key));
 const SCORING_PROP_KEYS = SCORING_PROPS.map((p) => p.key);
 
-const PREVIEW_PROPS = ["Urgency", "Importance", "Relevance", "Difficulty", "Time_Minutes"];
-
 async function apiFetch(path, options = {}) {
   const token = localStorage.getItem("token");
   const headers = { "Content-Type": "application/json" };
@@ -82,7 +80,7 @@ function MainApp() {
   const [preSortSnapshot, setPreSortSnapshot]       = useState([]);
   const [exitingIds, setExitingIds] = useState(new Set());
 
-  const [viewMode, setViewMode]         = useState("card");
+  const [viewMode, setViewMode]         = useState("subtasks");
   const [sortColumn, setSortColumn]     = useState(null);
   const [sortDirection, setSortDirection] = useState("asc");
 
@@ -923,9 +921,9 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["card", "📋 Cards"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
-                  const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : "text-cyan-400";
-                  const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : "rgba(6,182,212,0.15)";
+                {[["subtasks", "✅ Subtasks"], ["stats", "📈 Stats"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
+                  const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : "text-cyan-400";
+                  const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : "rgba(6,182,212,0.15)";
                   return (
                   <button key={mode} onClick={() => setViewMode(mode)}
                     className={`px-3 py-1.5 rounded-md text-[10px] font-black tracking-wider uppercase transition-all ${
@@ -939,7 +937,7 @@ function MainApp() {
               </div>
             </div>
 
-            {viewMode !== "ai-plan" && viewMode !== "tree" && viewMode !== "matrix" && <div className="flex items-center gap-2 flex-wrap">
+            {(viewMode === "table" || viewMode === "stats") && <div className="flex items-center gap-2 flex-wrap">
               {/* #tag Re-evaluate Button */}
               {evalMode ? (
                 <div className="flex items-center gap-2">
@@ -991,7 +989,7 @@ function MainApp() {
           <TreeView refreshSignal={treeRefresh} />
         ) : viewMode === "matrix" ? (
           <MatrixView tasks={tasks} onPersist={handleMatrixPersist} />
-        ) : viewMode === "card" ? (
+        ) : viewMode === "subtasks" ? (
           <LayoutGroup>
             <AnimatePresence mode="popLayout">
               {sortedTasks.map((task, index) => (
@@ -1001,9 +999,6 @@ function MainApp() {
                   rank={index + 1}
                   isExiting={exitingIds.has(task.Task_ID)}
                   getVal={getVal}
-                  adjustProp={adjustProp}
-                  propertyModes={propertyModes}
-                  propertyOrder={propertyOrder}
                   onComplete={handleComplete}
                   onDelete={handleDelete}
                   onPostpone={openPostpone}
@@ -1011,13 +1006,26 @@ function MainApp() {
                   onSubtaskToggled={handleSubtaskToggled}
                   onSubtaskDeleted={handleSubtaskDeleted}
                   prefersReduced={prefersReduced}
-                  evalMode={evalMode}
-                  isSelected={selectedTasks.has(task.Task_ID)}
-                  toggleSelection={toggleTaskSelection}
                 />
               ))}
             </AnimatePresence>
           </LayoutGroup>
+        ) : viewMode === "stats" ? (
+          <StatsView
+            tasks={sortedTasks}
+            exitingIds={exitingIds}
+            getVal={getVal}
+            adjustProp={adjustProp}
+            propertyModes={propertyModes}
+            propertyOrder={propertyOrder}
+            onComplete={handleComplete}
+            onDelete={handleDelete}
+            onPostpone={openPostpone}
+            prefersReduced={prefersReduced}
+            evalMode={evalMode}
+            selectedTasks={selectedTasks}
+            toggleSelection={toggleTaskSelection}
+          />
         ) : (
           <TaskTable
             tasks={sortedTasks}
@@ -1040,7 +1048,7 @@ function MainApp() {
           />
         )}
 
-        {tasks.length === 0 && viewMode !== "ai-plan" && viewMode !== "tree" && viewMode !== "matrix" && (
+        {tasks.length === 0 && (viewMode === "subtasks" || viewMode === "stats" || viewMode === "table") && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
             <p className="text-6xl mb-5">📋</p>
             <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
@@ -1624,9 +1632,15 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
     );
   };
 
+  const subtasks   = task.Subtasks || [];
+  const hasSubtasks = subtasks.length > 0;
+  const doneCount  = subtasks.filter((s) => s.done).length;
+  // Only rows with subtasks are expandable — the Table tab no longer adds them.
+  const rowClickable = evalMode || hasSubtasks;
+
   return (
     <>
-      <tr className={`border-t border-white/5 transition-colors cursor-pointer ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => evalMode ? toggleSelection(task.Task_ID) : onToggleExpand()}>
+      <tr className={`border-t border-white/5 transition-colors ${rowClickable ? "cursor-pointer" : ""} ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => { if (evalMode) toggleSelection(task.Task_ID); else if (hasSubtasks) onToggleExpand(); }}>
         {/* Rank / Checkbox */}
         <td className="px-4 py-3 text-center text-xs text-gray-600 select-none">
           {evalMode ? (
@@ -1642,9 +1656,17 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
           <div>
             <div className="font-bold text-sm flex items-center gap-2">
               {task.Name}
-              <motion.span
-                animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}
-                className="text-[10px]" style={{ color: isExpanded ? "#22d3ee" : "#475569" }}>▼</motion.span>
+              {hasSubtasks && (
+                <span className="inline-flex items-center gap-1 text-[9px] font-black tracking-wider px-1.5 py-0.5 rounded-md"
+                  style={{ background: doneCount === subtasks.length ? "rgba(74,222,128,0.15)" : "rgba(34,211,238,0.12)",
+                           color: doneCount === subtasks.length ? "#4ade80" : "#22d3ee",
+                           border: `1px solid ${doneCount === subtasks.length ? "rgba(74,222,128,0.3)" : "rgba(34,211,238,0.25)"}` }}>
+                  ☑ {doneCount}/{subtasks.length}
+                  <motion.span
+                    animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}
+                    className="text-[8px]">▼</motion.span>
+                </span>
+              )}
             </div>
             {task.Context && (
               <div className="text-xs text-gray-600 mt-0.5 truncate max-w-xs">{task.Context}</div>
@@ -1682,31 +1704,36 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
         </td>
       </tr>
 
-      {/* Expanded subtask row */}
-      {isExpanded && (
+      {/* Expanded subtask row — read-only view distributed across columns.
+          Adding subtasks lives in the ✅ Subtasks tab, not here. */}
+      {isExpanded && hasSubtasks && (
         <tr>
           <td colSpan={10} className="px-4 py-4" style={{ background: "rgba(0,0,0,0.2)", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
             <div className="pl-8">
-              <p className="text-[10px] font-black tracking-widest text-gray-600 uppercase mb-3">
-                Subtasks {task.Subtasks?.length ? `(${task.Subtasks.filter(s => s.done).length}/${task.Subtasks.length})` : ""}
-              </p>
-              {task.Subtasks && task.Subtasks.length > 0 && (
-                <div className="mb-3 space-y-1.5">
-                  {task.Subtasks.map(st => (
-                    <div key={st.id} className="flex items-center gap-2 text-sm">
-                      <button onClick={() => onSubtaskToggled(task.Task_ID, st.id, !st.done)}
-                        className="w-4 h-4 rounded border flex items-center justify-center transition-all"
-                        style={{ borderColor: st.done ? "#22d3ee" : "#334155", background: st.done ? "rgba(34,211,238,0.15)" : "transparent" }}>
-                        {st.done && <span className="text-[8px] text-cyan-400">✓</span>}
-                      </button>
-                      <span className={`flex-1 ${st.done ? "line-through text-gray-600" : "text-gray-300"}`}>{st.name}</span>
-                      <button onClick={() => onSubtaskDeleted(task.Task_ID, st.id)}
-                        className="text-xs text-gray-700 hover:text-red-400 transition-colors">✕</button>
-                    </div>
-                  ))}
+              <div className="flex items-center gap-2 mb-3">
+                <p className="text-[10px] font-black tracking-widest text-gray-600 uppercase">Subtasks</p>
+                <div className="flex-1 max-w-[160px] h-1 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
+                  <div style={{ width: `${Math.round((doneCount / subtasks.length) * 100)}%`, height: "100%",
+                                background: doneCount === subtasks.length ? "#4ade80" : "#22d3ee", borderRadius: 9999 }} />
                 </div>
-              )}
-              <SubtaskAddInline taskId={task.Task_ID} onAdded={onSubtaskAdded} />
+                <span className="text-[10px] font-black tabular-nums" style={{ color: doneCount === subtasks.length ? "#4ade80" : "#64748b" }}>
+                  {doneCount}/{subtasks.length}
+                </span>
+              </div>
+              <div className="grid gap-x-6 gap-y-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+                {subtasks.map(st => (
+                  <div key={st.id} className="flex items-center gap-2 text-sm group">
+                    <button onClick={(e) => { e.stopPropagation(); onSubtaskToggled(task.Task_ID, st.id, !st.done); }}
+                      className="w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-all"
+                      style={{ borderColor: st.done ? "#22d3ee" : "#334155", background: st.done ? "rgba(34,211,238,0.15)" : "transparent" }}>
+                      {st.done && <span className="text-[8px] text-cyan-400">✓</span>}
+                    </button>
+                    <span className={`flex-1 truncate ${st.done ? "line-through text-gray-600" : "text-gray-300"}`}>{st.name}</span>
+                    <button onClick={(e) => { e.stopPropagation(); onSubtaskDeleted(task.Task_ID, st.id); }}
+                      className="text-xs text-gray-800 group-hover:text-gray-600 hover:!text-red-400 transition-colors flex-shrink-0">✕</button>
+                  </div>
+                ))}
+              </div>
             </div>
           </td>
         </tr>
@@ -1715,55 +1742,168 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
   );
 }
 
-function SubtaskAddInline({ taskId, onAdded }) {
-  const [newName, setNewName] = useState("");
-  const [adding, setAdding]   = useState(false);
-
-  const handleAdd = async () => {
-    if (!newName.trim()) return;
-    setAdding(true);
-    try {
-      const st = await apiFetch(`/tasks/${taskId}/subtasks`, {
-        method: "POST",
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-      onAdded(taskId, st);
-      setNewName("");
-    } catch (err) {
-      console.error("Failed to add subtask:", err);
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-2">
-      <input value={newName} onChange={(e) => setNewName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-        placeholder="Add a subtask…"
-        className="flex-1 bg-transparent text-sm text-white placeholder-gray-700 outline-none px-2 py-1 rounded"
-        style={{ fontFamily: "inherit" }} />
-      <button onClick={handleAdd} disabled={!newName.trim() || adding}
-        className="text-[10px] font-black tracking-widest px-3 py-1 rounded-lg transition-all disabled:opacity-30"
-        style={{ color: "#22d3ee", background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.2)" }}>
-        {adding ? "…" : "＋ ADD"}
-      </button>
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  TaskCard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder,onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced, evalMode, isSelected, toggleSelection }) {
-  const [expanded, setExpanded] = useState(false);
+function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
   const spring = { type: "spring", stiffness: 380, damping: 38 };
 
-  const heat      = Math.round((getVal(task, "Urgency") * getVal(task, "Importance")) / 10);
-  const heatColor = heat >= 8 ? "#ef4444" : heat >= 5 ? "#f97316" : heat >= 3 ? "#eab308" : "#22d3ee";
-  const subtasks  = task.Subtasks || [];
-  const donePct   = subtasks.length ? Math.round((subtasks.filter((s) => s.done).length / subtasks.length) * 100) : null;
+  const subtasks = task.Subtasks || [];
+  const doneCount = subtasks.filter((s) => s.done).length;
+  const donePct   = subtasks.length ? Math.round((doneCount / subtasks.length) * 100) : null;
+  const allDone   = subtasks.length > 0 && doneCount === subtasks.length;
+
+  return (
+    <motion.div layout={!prefersReduced} layoutId={task.Task_ID}
+      initial={{ opacity: 0, x: -20, scale: 0.98 }}
+      animate={isExiting ? { opacity: 0, x: 120, scale: 0.92 } : { opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 120, scale: 0.9 }}
+      transition={prefersReduced ? { duration: 0 } : { ...spring, layout: spring }}
+      className="mb-3 rounded-2xl overflow-hidden transition-colors"
+      style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${allDone ? "#4ade80" : "#22d3ee"}` }}>
+
+      {/* Header — no longer a toggle; subtasks are always visible below */}
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
+          style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
+
+        <motion.button whileTap={{ scale: 0.7 }} onClick={() => onComplete(task.Task_ID)} title="Mark complete"
+          className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
+          style={{ borderColor: "#334155" }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4ade80")}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#334155")} />
+
+        <div className="flex-1 min-w-0">
+          <p className="text-white text-sm font-bold leading-snug truncate">{task.Name}</p>
+          {task.Context && <p className="text-gray-600 text-xs mt-0.5 truncate">{task.Context}</p>}
+        </div>
+
+        {/* Progress ring-style badge */}
+        {donePct !== null ? (
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="w-24 h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
+              <motion.div animate={{ width: `${donePct}%` }} transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                style={{ height: "100%", background: allDone ? "#4ade80" : "#22d3ee", borderRadius: 9999 }} />
+            </div>
+            <span className="text-[10px] font-black tabular-nums w-14 text-right"
+              style={{ color: allDone ? "#4ade80" : "#64748b" }}>{doneCount}/{subtasks.length}</span>
+          </div>
+        ) : (
+          <span className="text-[9px] font-black tracking-widest uppercase text-gray-700 flex-shrink-0">No subtasks yet</span>
+        )}
+
+        <button onClick={() => onPostpone(task)} title="Postpone until tomorrow"
+          className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
+
+        <button onClick={() => onDelete(task.Task_ID)} title="Delete"
+          className="flex-shrink-0 text-xs transition-colors ml-1" style={{ color: "#334155" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✕</button>
+      </div>
+
+      {/* Subtasks always visible — this is the whole point of the tab */}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+        <SubtaskSection task={task}
+          onAdded={(st)      => onSubtaskAdded(task.Task_ID, st)}
+          onToggled={(id, d) => onSubtaskToggled(task.Task_ID, id, d)}
+          onDeleted={(id)    => onSubtaskDeleted(task.Task_ID, id)} />
+      </div>
+    </motion.div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  StatsCard — property/score display (bars, heat %, property controls)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const heatOf      = (u, i) => Math.round((u * i) / 10);
+const heatColorOf = (h) => (h >= 8 ? "#ef4444" : h >= 5 ? "#f97316" : h >= 3 ? "#eab308" : "#22d3ee");
+
+function StatsView({ tasks, exitingIds, getVal, adjustProp, propertyModes, propertyOrder, onComplete, onDelete, onPostpone, prefersReduced, evalMode, selectedTasks, toggleSelection }) {
+  // ── Aggregate metrics across all active tasks ──
+  const count = tasks.length;
+  const totalTime = tasks.reduce((sum, t) => sum + (getVal(t, "Time_Minutes") || 0), 0);
+  const heats = tasks.map((t) => heatOf(getVal(t, "Urgency"), getVal(t, "Importance")));
+  const avgHeat = count ? Math.round((heats.reduce((a, b) => a + b, 0) / count) * 10) : 0;
+
+  const bands = [
+    { label: "Critical", color: "#ef4444", n: heats.filter((h) => h >= 8).length },
+    { label: "High",     color: "#f97316", n: heats.filter((h) => h >= 5 && h < 8).length },
+    { label: "Medium",   color: "#eab308", n: heats.filter((h) => h >= 3 && h < 5).length },
+    { label: "Low",      color: "#22d3ee", n: heats.filter((h) => h < 3).length },
+  ];
+
+  const StatTile = ({ label, value, sub, color }) => (
+    <div className="rounded-2xl px-4 py-3 flex flex-col gap-0.5"
+      style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <p className="text-[9px] font-black tracking-widest uppercase text-gray-600">{label}</p>
+      <p className="text-2xl font-black leading-tight" style={{ color: color || "#e2e8f0" }}>{value}</p>
+      {sub && <p className="text-[10px] text-gray-600">{sub}</p>}
+    </div>
+  );
+
+  return (
+    <div>
+      {/* ── Dashboard ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <StatTile label="Active Tasks" value={count} sub="in the queue" />
+        <StatTile label="Total Est. Time" value={formatMinutes(totalTime)} sub="to clear everything" color="#60a5fa" />
+        <StatTile label="Avg Focus Score" value={`${avgHeat}%`} sub="urgency × importance" color={heatColorOf(Math.round(avgHeat / 10))} />
+        <div className="rounded-2xl px-4 py-3 flex flex-col gap-1.5"
+          style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
+          <p className="text-[9px] font-black tracking-widest uppercase text-gray-600">Priority Mix</p>
+          <div className="flex h-2.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
+            {bands.map((b) => b.n > 0 && (
+              <div key={b.label} title={`${b.label}: ${b.n}`}
+                style={{ width: `${(b.n / count) * 100}%`, background: b.color }} />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+            {bands.map((b) => (
+              <span key={b.label} className="flex items-center gap-1 text-[9px] text-gray-500">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: b.color }} />{b.label} {b.n}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Per-task scorecards (scores always visible) ── */}
+      <LayoutGroup>
+        <AnimatePresence mode="popLayout">
+          {tasks.map((task, index) => (
+            <StatsCard
+              key={task.Task_ID}
+              task={task}
+              rank={index + 1}
+              isExiting={exitingIds.has(task.Task_ID)}
+              getVal={getVal}
+              adjustProp={adjustProp}
+              propertyModes={propertyModes}
+              propertyOrder={propertyOrder}
+              onComplete={onComplete}
+              onDelete={onDelete}
+              onPostpone={onPostpone}
+              prefersReduced={prefersReduced}
+              evalMode={evalMode}
+              isSelected={selectedTasks.has(task.Task_ID)}
+              toggleSelection={toggleSelection}
+            />
+          ))}
+        </AnimatePresence>
+      </LayoutGroup>
+    </div>
+  );
+}
+
+function StatsCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder, onComplete, onDelete, onPostpone, prefersReduced, evalMode, isSelected, toggleSelection }) {
+  const spring = { type: "spring", stiffness: 380, damping: 38 };
+
+  const heat      = heatOf(getVal(task, "Urgency"), getVal(task, "Importance"));
+  const heatColor = heatColorOf(heat);
 
   return (
     <motion.div layout={!prefersReduced} layoutId={task.Task_ID}
@@ -1774,13 +1914,9 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, pr
       className={`mb-3 rounded-2xl overflow-hidden transition-colors ${evalMode && isSelected ? "ring-2 ring-purple-500" : ""}`}
       style={{ background: evalMode && isSelected ? "#1e1b4b" : "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${heatColor}` }}>
 
-      <div className="flex items-center gap-3 px-4 py-3.5 cursor-pointer" onClick={() => {
-        if (evalMode) {
-          toggleSelection(task.Task_ID);
-        } else {
-          setExpanded((v) => !v);
-        }
-      }}>
+      {/* Header */}
+      <div className={`flex items-center gap-3 px-4 py-3 ${evalMode ? "cursor-pointer" : ""}`}
+        onClick={() => evalMode && toggleSelection(task.Task_ID)}>
         {evalMode ? (
           <div className={`w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg border-2 ${isSelected ? 'border-purple-500 bg-purple-500' : 'border-gray-600'}`}>
             {isSelected && <span className="text-white text-xs">✓</span>}
@@ -1789,113 +1925,56 @@ function TaskCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, pr
           <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
             style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
         )}
-        
+
         <motion.button whileTap={{ scale: 0.7 }} onClick={(e) => { e.stopPropagation(); onComplete(task.Task_ID); }} title="Mark complete"
           className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
           style={{ borderColor: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4ade80")}
           onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#334155")} />
-        
+
         <div className="flex-1 min-w-0">
           <p className="text-white text-sm font-bold leading-snug truncate">{task.Name}</p>
           {task.Context && <p className="text-gray-600 text-xs mt-0.5 truncate">{task.Context}</p>}
-          {donePct !== null && (
-            <div className="flex items-center gap-2 mt-1">
-              <div className="flex-1 h-0.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
-                <motion.div animate={{ width: `${donePct}%` }} transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                  style={{ height: "100%", background: "#22d3ee", borderRadius: 9999 }} />
-              </div>
-              <span className="text-[9px] text-gray-600">{donePct}%</span>
-            </div>
-          )}
         </div>
-        
-        <div className="flex items-end gap-1 h-7 flex-shrink-0">
-          {PREVIEW_PROPS.map((key) => {
-            const prop = PROPERTIES.find((p) => p.key === key);
-            const val  = getVal(task, key);
-            const isBinary = propertyModes[key] === "binary";
-            
-            if (isBinary) {
-              const isYes = val >= 5;
-              return (
-                <div key={key} title={`${key}: ${isYes ? 'Yes' : 'No'}`} 
-                  className="flex items-end justify-center flex-shrink-0 h-full"
-                  style={{ width: 4 }}>
-                  <motion.div 
-                    initial={false}
-                    animate={{ backgroundColor: isYes ? prop.bar : "rgba(255,255,255,0.1)" }}
-                    transition={{ duration: 0.2 }}
-                    style={{ width: 4, height: 4, borderRadius: 2, marginBottom: "2px" }}
-                  />
-                </div>
-              );
-            }
 
-            return (
-              <motion.div key={key} title={`${key}: ${val}`}
-                animate={{ height: `${val * 10}%` }} transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                style={{ width: 4, background: prop.bar, borderRadius: 9999, minHeight: 2, alignSelf: "flex-end" }} />
-            );
-          })}
+        <div className="flex items-center gap-1 flex-shrink-0" title="Focus score — urgency × importance">
+          <span className="text-[8px] font-black tracking-widest uppercase" style={{ color: heatColor }}>Focus</span>
+          <span className="text-[11px] font-black px-2 py-0.5 rounded-lg"
+            style={{ background: `${heatColor}22`, color: heatColor }}>{heat * 10}%</span>
         </div>
-        
-        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg flex-shrink-0"
-          style={{ background: `${heatColor}22`, color: heatColor }}>{heat * 10}%</span>
-        
+
         <button onClick={(e) => { e.stopPropagation(); onPostpone(task); }} title="Postpone until tomorrow"
           className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
-        
-        <motion.span
-          animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}
-          className="flex-shrink-0 text-xs transition-colors"
-          style={{ color: expanded ? "#22d3ee" : "#475569" }}>▼</motion.span>
-        
+
         <button onClick={(e) => { e.stopPropagation(); onDelete(task.Task_ID); }} title="Delete"
           className="flex-shrink-0 text-xs transition-colors ml-1" style={{ color: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✕</button>
       </div>
 
-      <AnimatePresence>
-        {expanded && (
-          <motion.div key="exp" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22, ease: "easeInOut" }}
-            className="overflow-hidden" style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-            <div className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
-              {(propertyOrder || SCORING_PROP_KEYS)
-                .map(key => PROPERTIES.find(p => p.key === key))
-                .filter(Boolean)
-                .map(({ key, label, hex, bar }) => (
-                  <PropertyControl
-                    key={key}
-                    label={label}
-                    value={getVal(task, key)}
-                    hex={hex}
-                    bar={bar}
-                    propKey={key}
-                    mode={propertyModes[key]}
-                    onDec={() => adjustProp(task.Task_ID, key, -1)}
-                    onInc={() => adjustProp(task.Task_ID, key, 1)}
-                    onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
-                  />
-                ))}
-            </div>
-            {task.Context && (
-              <div className="mx-4 mb-4 px-3 py-2 rounded-lg text-xs text-gray-500"
-                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
-                📝 {task.Context}
-              </div>
-            )}
-            <SubtaskSection task={task}
-              onAdded={(st)      => onSubtaskAdded(task.Task_ID, st)}
-              onToggled={(id, d) => onSubtaskToggled(task.Task_ID, id, d)}
-              onDeleted={(id)    => onSubtaskDeleted(task.Task_ID, id)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Scores — always visible, this is the point of the Stats tab */}
+      <div className="px-4 pb-4 pt-1 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+        {(propertyOrder || SCORING_PROP_KEYS)
+          .map(key => PROPERTIES.find(p => p.key === key))
+          .filter(Boolean)
+          .map(({ key, label, hex, bar }) => (
+            <PropertyControl
+              key={key}
+              label={label}
+              value={getVal(task, key)}
+              hex={hex}
+              bar={bar}
+              propKey={key}
+              mode={propertyModes[key]}
+              onDec={() => adjustProp(task.Task_ID, key, -1)}
+              onInc={() => adjustProp(task.Task_ID, key, 1)}
+              onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
+            />
+          ))}
+      </div>
     </motion.div>
   );
 }

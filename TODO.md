@@ -6,6 +6,13 @@ Project Description
 
 ### Todo
 
+- [ ] "Tasks to focus" idea  
+- [ ] Matrix tab should only have actual tasks, not parents  
+- [ ] Where to put evaluate button  
+- [ ] Tree tab has the potential to show in a very cool and different way the tree  
+- [ ] If the openrouter model is not available for any reason, there is no way for the user to know so  
+- [ ] Google and Notion link and connection  
+- [ ] Since now it is linked to Notion, a way for the user to implement it should be created  
 - [ ] Check sort button to explain what it does  
 - [ ] Freeze title row  
 - [ ] Instead of graphic of bars on cards tab -> a tab for graphic representation of properties  
