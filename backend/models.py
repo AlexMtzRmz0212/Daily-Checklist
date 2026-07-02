@@ -30,8 +30,9 @@ class Task(Base):
     Importance = Column(Integer, default=5)
     Postponed_Until = Column(String, nullable=True)
     Postpone_Reason = Column(String, nullable=True)
-    Subtasks = Column(JSON, default=list) # Store subtasks as JSON
+    Subtasks = Column(JSON, default=list) # Store subtasks as JSON; each: {id, name, done, notion_id?}
     Parent_ID = Column(String, nullable=True, index=True)       # Local parent task (self-reference by Task_ID)
     Notion_Page_ID = Column(String, nullable=True, index=True)  # Maps this task to a Notion page for two-way sync
+    Node_Type = Column(String, default="task")                  # "task" (last parent / leaf task) | "category"
 
     owner = relationship("User", back_populates="tasks")

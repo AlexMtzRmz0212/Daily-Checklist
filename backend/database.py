@@ -57,6 +57,7 @@ def ensure_columns() -> None:
     expected = {
         "Parent_ID": "VARCHAR",
         "Notion_Page_ID": "VARCHAR",
+        "Node_Type": "VARCHAR",
     }
     inspector = inspect(engine)
     if "tasks" not in inspector.get_table_names():
@@ -70,3 +71,7 @@ def ensure_columns() -> None:
     with engine.begin() as conn:
         for name, ddl in missing.items():
             conn.execute(text(f'ALTER TABLE tasks ADD COLUMN "{name}" {ddl}'))
+        # Backfill Node_Type so existing rows keep appearing in task views
+        # (the added column is NULL for pre-existing rows).
+        if "Node_Type" in missing:
+            conn.execute(text('UPDATE tasks SET "Node_Type" = \'task\' WHERE "Node_Type" IS NULL'))

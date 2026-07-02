@@ -11,7 +11,7 @@ names in the user's Notion database. Keys used here:
     title, parent, status, description, hierarchy, priority
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import httpx
 
@@ -132,3 +132,72 @@ def parse_page(page: dict, prop_map: Dict[str, str]) -> Dict[str, Any]:
         "hierarchy":   _number(props, pm["hierarchy"]),
         "priority":    _number(props, pm["priority"]),
     }
+
+
+# ── Tree classification ──────────────────────────────────────────────────────
+# The Notion database is a tree of pages linked by the "parent" relation. Layers:
+#   root parents      → major categories
+#   intermediate      → labels / groupings
+#   last parent       → the actual TASK (a node that has leaf children)
+#   leaves            → the SUBTASKS of that task
+# Two special root parents act as archives: "Done" and "Forget".
+
+def classify_tree(
+    parsed: List[Dict[str, Any]],
+    done_titles: Iterable[str] = ("done",),
+    forget_titles: Iterable[str] = ("forget", "forgotten"),
+) -> Dict[str, Dict[str, Any]]:
+    """Classify every parsed page as ``category``, ``task``, or ``subtask``.
+
+    Returns a map ``notion_id -> {"role", "archive"}`` where:
+      * ``role``    is ``"subtask"`` (leaf), ``"task"`` (has a leaf child, i.e. the
+                    last parent, or a parentless leaf), or ``"category"`` (has
+                    children but none are leaves).
+      * ``archive`` is ``"done"`` / ``"forget"`` / ``None`` based on the title of the
+                    node's ROOT ancestor.
+    """
+    by_id: Dict[str, Dict[str, Any]] = {p["notion_id"]: p for p in parsed}
+    done_set = {t.strip().lower() for t in done_titles}
+    forget_set = {t.strip().lower() for t in forget_titles}
+
+    def parents_in_db(nid: str) -> List[str]:
+        return [pid for pid in by_id[nid]["parent_ids"] if pid in by_id]
+
+    # A page is a leaf if no other in-DB page names it as a parent.
+    has_child: Set[str] = set()
+    for nid in by_id:
+        for pid in parents_in_db(nid):
+            has_child.add(pid)
+
+    def is_leaf(nid: str) -> bool:
+        return nid not in has_child
+
+    def root_of(nid: str) -> str:
+        seen: Set[str] = set()
+        cur = nid
+        while True:
+            parents = parents_in_db(cur)
+            if not parents or cur in seen:
+                return cur
+            seen.add(cur)
+            cur = parents[0]
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for nid in by_id:
+        if is_leaf(nid):
+            # A leaf with a parent is a subtask; a lone leaf is a standalone task.
+            role = "subtask" if parents_in_db(nid) else "task"
+        elif any(is_leaf(cid) for cid in _children_of(nid, by_id)):
+            role = "task"       # last parent: has at least one leaf child
+        else:
+            role = "category"   # only non-leaf children → structural node
+
+        root_title = by_id[root_of(nid)]["title"].strip().lower()
+        archive = "done" if root_title in done_set else "forget" if root_title in forget_set else None
+        result[nid] = {"role": role, "archive": archive}
+
+    return result
+
+
+def _children_of(nid: str, by_id: Dict[str, Dict[str, Any]]) -> List[str]:
+    return [cid for cid, p in by_id.items() if nid in p["parent_ids"] and cid in by_id]

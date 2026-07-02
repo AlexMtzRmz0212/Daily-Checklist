@@ -54,6 +54,9 @@ GLOBAL_OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY") # Optional fall
 MODEL: str = os.getenv("MODEL", "anthropic/claude-3.5-sonnet")
 SITE_URL: str = "http://localhost:5173"
 SITE_NAME: str = "AI Task Sorter"
+# Cap concurrent OpenRouter requests so bulk (re)evaluation doesn't trip rate limits.
+OPENROUTER_MAX_CONCURRENCY: int = int(os.getenv("OPENROUTER_MAX_CONCURRENCY", "5"))
+_openrouter_semaphore = asyncio.Semaphore(OPENROUTER_MAX_CONCURRENCY)
 
 # Priority & Hierarchy are managed in the Matrix tab: always scale, 1 = highest.
 # They are intentionally kept out of DEFAULT_PROPERTY_ORDER (the reorderable display list).
@@ -201,6 +204,9 @@ def get_notion_config(user: models.User) -> Dict[str, Any]:
         "database_id": raw.get("database_id", ""),
         "property_map": {**notion.DEFAULT_PROP_MAP, **(raw.get("property_map") or {})},
         "version": raw.get("version", NOTION_VERSION),
+        # Titles of the special archive root parents (case-insensitive match).
+        "done_titles": raw.get("done_titles") or ["done"],
+        "forget_titles": raw.get("forget_titles") or ["forget", "forgotten"],
         "connected": bool(token and raw.get("database_id")),
     }
 
@@ -289,23 +295,49 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
     reconstructed.setdefault("Time_Minutes", 30)
     return json.dumps(reconstructed)
 
-async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 1000, temperature: float = 0.2) -> str:
+async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 1000, temperature: float = 0.2, max_retries: int = 3) -> str:
     api_key = _get_api_key_for_user(user)
     user_settings = get_user_settings(user)
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            OPENROUTER_URL,
-            headers=_or_headers(api_key),
-            json={
-                "model": user_settings.get("model", MODEL),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+    payload = {
+        "model": user_settings.get("model", MODEL),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    last_error = ""
+    for attempt in range(max_retries):
+        async with _openrouter_semaphore:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(OPENROUTER_URL, headers=_or_headers(api_key), json=payload)
+
+        # OpenRouter sometimes returns transient errors (rate limits, upstream
+        # provider hiccups) either as a non-200 status or as HTTP 200 with an
+        # {"error": ...} body and no "choices". Retry both with backoff.
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+
+        if response.status_code == 200 and isinstance(data, dict) and data.get("choices"):
+            return data["choices"][0]["message"]["content"]
+
+        # Pull the most useful error message we can find.
+        if isinstance(data, dict) and data.get("error"):
+            err = data["error"]
+            last_error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        else:
+            last_error = response.text
+
+        retryable = response.status_code in (429, 500, 502, 503, 504) or (
+            response.status_code == 200 and isinstance(data, dict) and bool(data.get("error"))
         )
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"OpenRouter returned {response.status_code}: {response.text}")
-    return response.json()["choices"][0]["message"]["content"]
+        if retryable and attempt < max_retries - 1:
+            await asyncio.sleep(0.5 * (2 ** attempt))
+            continue
+        break
+
+    raise HTTPException(status_code=502, detail=f"OpenRouter request failed: {last_error}")
 
 def _build_score_prompt(name: str, context: str, property_modes: Dict[str, str]) -> str:
     score_fields = []
@@ -423,6 +455,7 @@ def _task_to_dict(task: models.Task) -> Dict:
         "Subtasks": task.Subtasks or [],
         "Parent_ID": task.Parent_ID,
         "Notion_Page_ID": task.Notion_Page_ID,
+        "Node_Type": task.Node_Type or "task",
     }
 
 async def _reactivate_due_postponed(tasks: List[models.Task], user: models.User, db: Session) -> List[Dict]:
@@ -611,7 +644,40 @@ def _clamp_1_10(value: Any) -> Optional[int]:
         return None
 
 def _notion_status_to_app(status: str) -> str:
-    return "Completed" if status.strip().lower() in ("done", "complete", "completed") else "Active"
+    """Fallback status mapping from the Notion '1. Status' select value."""
+    s = status.strip().lower()
+    if s in ("done", "complete", "completed"):
+        return "Completed"
+    if s in ("forget", "forgotten", "ignore", "drop"):
+        return "Forgotten"
+    return "Active"
+
+def _derive_status(archive: Optional[str], notion_status: str) -> str:
+    """Root-ancestor archive wins ('Done'/'Forget' roots); else fall back to '1. Status'."""
+    if archive == "done":
+        return "Completed"
+    if archive == "forget":
+        return "Forgotten"
+    return _notion_status_to_app(notion_status)
+
+def _upsert_subtask(parent_task: models.Task, notion_id: str, name: str, done: bool) -> None:
+    """Fold a Notion leaf into the parent task's Subtasks, matching by notion_id."""
+    subs = list(parent_task.Subtasks or [])
+    for s in subs:
+        if s.get("notion_id") == notion_id:
+            s["name"] = name
+            s["done"] = done
+            parent_task.Subtasks = subs   # reassign so SQLAlchemy detects the JSON change
+            return
+    subs.append({"id": str(uuid.uuid4()), "name": name, "done": done, "notion_id": notion_id})
+    parent_task.Subtasks = subs
+
+def _prune_notion_subtasks(task: models.Task, present_notion_ids: set) -> None:
+    """Drop Notion-sourced subtasks that no longer exist in Notion; keep local ones."""
+    subs = task.Subtasks or []
+    kept = [s for s in subs if not s.get("notion_id") or s.get("notion_id") in present_notion_ids]
+    if len(kept) != len(subs):
+        task.Subtasks = kept
 
 @app.post("/notion/import")
 async def notion_import(request: NotionImportRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
@@ -627,6 +693,10 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         raise HTTPException(status_code=502, detail=f"Could not reach Notion: {exc}")
 
     parsed = [notion.parse_page(p, cfg["property_map"]) for p in pages]
+    by_notion = {pg["notion_id"]: pg for pg in parsed}
+
+    # Classify every page as category / task / subtask and detect Done/Forget roots.
+    classes = notion.classify_tree(parsed, cfg["done_titles"], cfg["forget_titles"])
 
     # Existing tasks for this user keyed by their Notion page id.
     existing_by_notion = {
@@ -635,18 +705,25 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         if t.Notion_Page_ID
     }
 
-    imported: List[models.Task] = []
     new_tasks: List[models.Task] = []
-    notion_to_local: Dict[str, models.Task] = {}
+    notion_to_local: Dict[str, models.Task] = {}   # task & category rows only (leaves fold in)
 
+    # ── Pass 1: upsert task/category rows (leaves are folded in during Pass 3). ──
     for pg in parsed:
+        nid = pg["notion_id"]
+        role = classes[nid]["role"]
+        if role == "subtask":
+            continue
+        node_type = "category" if role == "category" else "task"
+        status = _derive_status(classes[nid]["archive"], pg["status"])
         h = _clamp_1_10(pg["hierarchy"])
         p = _clamp_1_10(pg["priority"])
-        task = existing_by_notion.get(pg["notion_id"])
+        task = existing_by_notion.get(nid)
         if task:
             task.Name = pg["title"]
             task.Context = pg["description"] or task.Context or ""
-            task.Status = _notion_status_to_app(pg["status"])
+            task.Status = status
+            task.Node_Type = node_type
             if h is not None:
                 task.Hierarchy = h
             if p is not None:
@@ -657,36 +734,61 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
                 user_id=current_user.id,
                 Name=pg["title"],
                 Context=pg["description"] or "",
-                Status=_notion_status_to_app(pg["status"]),
+                Status=status,
+                Node_Type=node_type,
                 Subtasks=[],
-                Notion_Page_ID=pg["notion_id"],
+                Notion_Page_ID=nid,
                 Hierarchy=h if h is not None else 5,
                 Priority=p if p is not None else 5,
             )
             db.add(task)
             new_tasks.append(task)
-        notion_to_local[pg["notion_id"]] = task
-        imported.append(task)
+        notion_to_local[nid] = task
 
-    # Resolve parent relations to local tasks (first parent that maps wins).
-    parent_of = {pg["notion_id"]: pg["parent_ids"] for pg in parsed}
-    for notion_id, task in notion_to_local.items():
-        for pid in parent_of.get(notion_id, []):
+    # ── Pass 2: parent links among task/category rows (first mapped parent wins). ──
+    for nid, task in notion_to_local.items():
+        task.Parent_ID = None
+        for pid in by_notion[nid]["parent_ids"]:
             parent_task = notion_to_local.get(pid)
-            if parent_task and parent_task is not task:
+            if parent_task is not None and parent_task is not task:
                 task.Parent_ID = parent_task.Task_ID
                 break
 
-    # Optionally fill the app-only properties for brand-new tasks via the existing scorer,
-    # then re-apply Notion's own Hierarchy/Priority where it provided them.
-    if request.score_new and new_tasks:
+    # ── Pass 3: fold subtask leaves into their parent task's Subtasks. ──
+    for pg in parsed:
+        nid = pg["notion_id"]
+        if classes[nid]["role"] != "subtask":
+            continue
+        parent_task = next(
+            (notion_to_local[pid] for pid in pg["parent_ids"] if pid in notion_to_local),
+            None,
+        )
+        if parent_task is None:
+            continue  # defensive: a subtask always has a non-leaf parent
+        done = _derive_status(classes[nid]["archive"], pg["status"]) != "Active"
+        _upsert_subtask(parent_task, nid, pg["title"], done)
+
+    # Prune Notion-sourced subtasks that vanished from Notion (keep local-only ones).
+    present_ids = set(by_notion)
+    for task in notion_to_local.values():
+        _prune_notion_subtasks(task, present_ids)
+
+    # Remove legacy rows that a previous import created for pages now classified as
+    # subtasks (older versions made a Task row for every leaf).
+    for nid, ex in existing_by_notion.items():
+        if classes.get(nid, {}).get("role") == "subtask":
+            db.delete(ex)
+
+    # ── Pass 4: AI-score only brand-new, Active task rows (skip categories/archived). ──
+    if request.score_new:
+        to_score = [t for t in new_tasks if t.Node_Type == "task" and t.Status == "Active"]
         notion_hp = {
             pg["notion_id"]: (_clamp_1_10(pg["hierarchy"]), _clamp_1_10(pg["priority"]))
             for pg in parsed
         }
         chunk_size = 15
-        for i in range(0, len(new_tasks), chunk_size):
-            chunk = new_tasks[i:i + chunk_size]
+        for i in range(0, len(to_score), chunk_size):
+            chunk = to_score[i:i + chunk_size]
             items = [TaskBulkItem(Name=t.Name, Context=t.Context or "") for t in chunk]
             metrics_list = await _score_tasks_bulk(items, current_user)
             for t, metrics in zip(chunk, metrics_list):
@@ -699,6 +801,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
                     t.Priority = np_
 
     db.commit()
+    imported = list(notion_to_local.values())
     for t in imported:
         db.refresh(t)
 
@@ -714,9 +817,11 @@ async def notion_export(db: Session = Depends(get_db), current_user: models.User
     if not cfg["connected"]:
         raise HTTPException(status_code=400, detail="Notion is not configured. Add a token and database ID in Settings.")
 
+    # Push scores only for real tasks — don't overwrite category pages' numbers.
     linked = db.query(models.Task).filter(
         models.Task.user_id == current_user.id,
         models.Task.Notion_Page_ID.isnot(None),
+        models.Task.Node_Type == "task",
     ).all()
 
     pushed, failures = 0, []
@@ -748,7 +853,8 @@ def get_all_tasks(db: Session = Depends(get_db), current_user: models.User = Dep
 async def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
     tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
     updated_tasks = await _reactivate_due_postponed(tasks, current_user, db)
-    return [t for t in updated_tasks if t.get("Status") == "Active"]
+    # Only real tasks (leaves/last-parents), never category/structural nodes.
+    return [t for t in updated_tasks if t.get("Status") == "Active" and (t.get("Node_Type") or "task") == "task"]
 
 @app.post("/tasks/evaluate")
 async def evaluate_task(task: TaskCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
@@ -793,7 +899,11 @@ async def evaluate_bulk(payload: TaskBulkCreate, db: Session = Depends(get_db), 
 
 @app.post("/tasks/reevaluate-all")
 async def reevaluate_all(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
-    active_tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id, models.Task.Status == "Active").all()
+    active_tasks = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id,
+        models.Task.Status == "Active",
+        models.Task.Node_Type == "task",
+    ).all()
     if not active_tasks:
         return []
     
@@ -814,7 +924,11 @@ async def reevaluate_selected(request: ReevaluateRequest, db: Session = Depends(
     if not request.task_ids:
         return []
         
-    tasks_to_eval = db.query(models.Task).filter(models.Task.user_id == current_user.id, models.Task.Task_ID.in_(request.task_ids)).all()
+    tasks_to_eval = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id,
+        models.Task.Task_ID.in_(request.task_ids),
+        models.Task.Node_Type == "task",
+    ).all()
     if not tasks_to_eval:
         return []
         

@@ -164,6 +164,7 @@ function MainApp() {
   const [sortError, setSortError] = useState("");
 
   const abortCtrl      = useRef(null);
+  const revalAbortCtrl = useRef(null);
   const prefersReduced = useReducedMotion();
 
   useEffect(() => {
@@ -377,16 +378,20 @@ function MainApp() {
   const handleReeval = async () => {
     if (!tasks.length) return;
     setRevalPhase("loading"); setRevalError("");
+    revalAbortCtrl.current = new AbortController();
+    const { signal } = revalAbortCtrl.current;
     try {
       let updated;
       if (selectedTasks.size > 0) {
         updated = await apiFetch("/tasks/reevaluate-selected", {
           method: "POST",
           body: JSON.stringify({ task_ids: Array.from(selectedTasks) }),
+          signal,
         });
       } else {
-        updated = await apiFetch("/tasks/reevaluate-all", { method: "POST" });
+        updated = await apiFetch("/tasks/reevaluate-all", { method: "POST", signal });
       }
+      if (signal.aborted) return;
       setTasks((p) => {
         const pMap = new Map(p.map(t => [t.Task_ID, t]));
         updated.forEach(t => pMap.set(t.Task_ID, t));
@@ -395,8 +400,13 @@ function MainApp() {
       setLocalEdits({}); setRevalPhase("idle");
       setEvalMode(false);
       setSelectedTasks(new Set());
-    } catch (e) { setRevalError(e.message); setRevalPhase("error"); }
+    } catch (e) {
+      if (e.name === "AbortError" || signal?.aborted) { setRevalPhase("idle"); return; }
+      setRevalError(e.message); setRevalPhase("error");
+    }
   };
+
+  const handleCancelReeval = () => { revalAbortCtrl.current?.abort(); setRevalPhase("idle"); };
 
   const toggleTaskSelection = useCallback((taskId) => {
     setSelectedTasks(prev => {
@@ -774,6 +784,12 @@ function MainApp() {
               <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Re-evaluating</p>
               <p className="text-gray-600 text-xs tracking-widest">rescoring {tasks.length} tasks in parallel…</p>
             </div>
+            <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
+              whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleCancelReeval}
+              className="px-8 py-3 rounded-xl font-black text-sm tracking-[0.25em] uppercase border"
+              style={{ background: "rgba(220,38,38,0.15)", borderColor: "rgba(220,38,38,0.5)", color: "#fca5a5" }}>
+              ✕ CANCEL
+            </motion.button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -921,7 +937,7 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["subtasks", "✅ Subtasks"], ["stats", "📈 Stats"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
+                {[["stats", "📈 Stats"], ["subtasks", "✅ Subtasks"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
                   const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : "text-cyan-400";
                   const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : "rgba(6,182,212,0.15)";
                   return (
@@ -937,7 +953,7 @@ function MainApp() {
               </div>
             </div>
 
-            {(viewMode === "table" || viewMode === "stats") && <div className="flex items-center gap-2 flex-wrap">
+            {viewMode === "table" && <div className="flex items-center gap-2 flex-wrap">
               {/* #tag Re-evaluate Button */}
               {evalMode ? (
                 <div className="flex items-center gap-2">
@@ -1013,18 +1029,7 @@ function MainApp() {
         ) : viewMode === "stats" ? (
           <StatsView
             tasks={sortedTasks}
-            exitingIds={exitingIds}
             getVal={getVal}
-            adjustProp={adjustProp}
-            propertyModes={propertyModes}
-            propertyOrder={propertyOrder}
-            onComplete={handleComplete}
-            onDelete={handleDelete}
-            onPostpone={openPostpone}
-            prefersReduced={prefersReduced}
-            evalMode={evalMode}
-            selectedTasks={selectedTasks}
-            toggleSelection={toggleTaskSelection}
           />
         ) : (
           <TaskTable
@@ -1183,7 +1188,11 @@ function buildTree(tasks) {
 }
 
 function StatusPill({ status }) {
-  const color = status === "Completed" ? "#34d399" : status === "Postponed" ? "#fbbf24" : "#22d3ee";
+  const color =
+    status === "Completed" ? "#34d399" :
+    status === "Postponed" ? "#fbbf24" :
+    status === "Forgotten" ? "#94a3b8" :
+    "#22d3ee";
   return (
     <span className="text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider"
       style={{ background: `${color}1f`, color, border: `1px solid ${color}55` }}>
@@ -1192,32 +1201,56 @@ function StatusPill({ status }) {
   );
 }
 
+// A folded-in Notion leaf: rendered from the parent task's Subtasks JSON, not a row.
+function SubtaskLeaf({ subtask }) {
+  return (
+    <div className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white/5 transition-colors" style={{ marginLeft: 16 }}>
+      <span className={`text-xs w-4 text-center ${subtask.done ? "text-emerald-400" : "text-gray-600"}`}>
+        {subtask.done ? "✔" : "◻"}
+      </span>
+      <span className={`text-sm ${subtask.done ? "text-gray-500 line-through" : "text-gray-300"}`}>
+        {subtask.name}
+      </span>
+    </div>
+  );
+}
+
 function TreeNode({ id, nodeMap, depth }) {
   const [open, setOpen] = useState(depth === 0);
   const task = nodeMap.get(id);
   if (!task) return null;
-  const isLeaf = task.children.length === 0;
+
+  // "category" = structural node (major category / label). "task" = a real task
+  // whose Notion leaves are folded into its Subtasks. Fall back to task.
+  const isCategory = task.Node_Type === "category";
+  const subtasks   = task.Subtasks || [];
+  const childRows  = task.children;                    // nested task/category rows
+  const childCount = childRows.length + subtasks.length;
+  const hasChildren = childCount > 0;
 
   return (
     <div style={{ marginLeft: depth === 0 ? 0 : 16 }}>
       <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/5 transition-colors">
-        {isLeaf ? (
-          <span className="text-gray-600 text-xs w-4 text-center">◾</span>
-        ) : (
+        {hasChildren ? (
           <button onClick={() => setOpen((o) => !o)} className="text-gray-500 hover:text-white text-xs w-4 text-center">
             {open ? "▾" : "▸"}
           </button>
+        ) : (
+          <span className="text-gray-600 text-xs w-4 text-center">◾</span>
         )}
-        <span className={`text-sm ${isLeaf ? "text-gray-300" : "text-white font-bold"}`}>
-          {isLeaf ? "" : "📁 "}{task.Name}
+        <span className={`text-sm ${isCategory ? "text-white font-bold" : "text-gray-200"}`}>
+          {isCategory ? "📁 " : "📋 "}{task.Name}
         </span>
         <StatusPill status={task.Status} />
-        {!isLeaf && <span className="text-[10px] text-gray-600">{task.children.length}</span>}
+        {hasChildren && <span className="text-[10px] text-gray-600">{childCount}</span>}
       </div>
-      {!isLeaf && open && (
+      {hasChildren && open && (
         <div className="border-l border-white/5 ml-2">
-          {task.children.map((cid) => (
+          {childRows.map((cid) => (
             <TreeNode key={cid} id={cid} nodeMap={nodeMap} depth={depth + 1} />
+          ))}
+          {subtasks.map((s) => (
+            <SubtaskLeaf key={s.id} subtask={s} />
           ))}
         </div>
       )}
@@ -1256,12 +1289,14 @@ function TreeView({ refreshSignal }) {
   }
 
   const { nodeMap, roots } = buildTree(tasks);
-  const leaves = [...nodeMap.values()].filter((n) => n.children.length === 0);
+  const categoryCount = tasks.filter((t) => t.Node_Type === "category").length;
+  const taskCount     = tasks.length - categoryCount;
+  const subtaskCount  = tasks.reduce((n, t) => n + (t.Subtasks?.length || 0), 0);
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
       <div className="flex items-center justify-between">
-        <p className="text-[10px] text-gray-600 uppercase tracking-widest">{tasks.length} tasks · {leaves.length} leaves</p>
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
         <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
       </div>
 
@@ -1816,18 +1851,29 @@ function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostp
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  StatsCard — property/score display (bars, heat %, property controls)
+//  StatsView — read-only aggregate dashboard (no per-task list)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const heatOf      = (u, i) => Math.round((u * i) / 10);
 const heatColorOf = (h) => (h >= 8 ? "#ef4444" : h >= 5 ? "#f97316" : h >= 3 ? "#eab308" : "#22d3ee");
 
-function StatsView({ tasks, exitingIds, getVal, adjustProp, propertyModes, propertyOrder, onComplete, onDelete, onPostpone, prefersReduced, evalMode, selectedTasks, toggleSelection }) {
+function StatsView({ tasks, getVal }) {
   // ── Aggregate metrics across all active tasks ──
   const count = tasks.length;
   const totalTime = tasks.reduce((sum, t) => sum + (getVal(t, "Time_Minutes") || 0), 0);
+  const totalHours = totalTime / 60;
+  const avgTime = count ? Math.round(totalTime / count) : 0;
   const heats = tasks.map((t) => heatOf(getVal(t, "Urgency"), getVal(t, "Importance")));
   const avgHeat = count ? Math.round((heats.reduce((a, b) => a + b, 0) / count) * 10) : 0;
+
+  // Average of each scoring property (1–10 scale).
+  const avgOf = (key) => count ? (tasks.reduce((s, t) => s + (getVal(t, key) || 0), 0) / count) : 0;
+  const fmtAvg = (v) => (Math.round(v * 10) / 10).toFixed(1);
+
+  const criticalCount = heats.filter((h) => h >= 8).length;
+  const quickWins = tasks.filter((t) => (getVal(t, "Time_Minutes") || 0) > 0 && (getVal(t, "Time_Minutes") || 0) <= 30).length;
+  const timeVals = tasks.map((t) => getVal(t, "Time_Minutes") || 0).filter((v) => v > 0);
+  const longest = timeVals.length ? Math.max(...timeVals) : 0;
 
   const bands = [
     { label: "Critical", color: "#ef4444", n: heats.filter((h) => h >= 8).length },
@@ -1847,10 +1893,11 @@ function StatsView({ tasks, exitingIds, getVal, adjustProp, propertyModes, prope
 
   return (
     <div>
-      {/* ── Dashboard ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      {/* ── Dashboard: headline metrics ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <StatTile label="Active Tasks" value={count} sub="in the queue" />
-        <StatTile label="Total Est. Time" value={formatMinutes(totalTime)} sub="to clear everything" color="#60a5fa" />
+        <StatTile label="Total Est. Time" value={formatMinutes(totalTime)}
+          sub={`≈ ${(Math.round(totalHours * 10) / 10).toFixed(1)} hours`} color="#60a5fa" />
         <StatTile label="Avg Focus Score" value={`${avgHeat}%`} sub="urgency × importance" color={heatColorOf(Math.round(avgHeat / 10))} />
         <div className="rounded-2xl px-4 py-3 flex flex-col gap-1.5"
           style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1871,111 +1918,23 @@ function StatsView({ tasks, exitingIds, getVal, adjustProp, propertyModes, prope
         </div>
       </div>
 
-      {/* ── Per-task scorecards (scores always visible) ── */}
-      <LayoutGroup>
-        <AnimatePresence mode="popLayout">
-          {tasks.map((task, index) => (
-            <StatsCard
-              key={task.Task_ID}
-              task={task}
-              rank={index + 1}
-              isExiting={exitingIds.has(task.Task_ID)}
-              getVal={getVal}
-              adjustProp={adjustProp}
-              propertyModes={propertyModes}
-              propertyOrder={propertyOrder}
-              onComplete={onComplete}
-              onDelete={onDelete}
-              onPostpone={onPostpone}
-              prefersReduced={prefersReduced}
-              evalMode={evalMode}
-              isSelected={selectedTasks.has(task.Task_ID)}
-              toggleSelection={toggleSelection}
-            />
-          ))}
-        </AnimatePresence>
-      </LayoutGroup>
+      {/* ── Dashboard: workload breakdown ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+        <StatTile label="Avg Time / Task" value={formatMinutes(avgTime)} sub="mean effort per task" color="#60a5fa" />
+        <StatTile label="Critical Tasks" value={criticalCount}
+          sub={count ? `${Math.round((criticalCount / count) * 100)}% of queue` : "focus ≥ 80%"} color="#ef4444" />
+        <StatTile label="Quick Wins" value={quickWins} sub="≤ 30 min each" color="#22d3ee" />
+        <StatTile label="Longest Task" value={longest ? formatMinutes(longest) : "—"} sub="biggest single effort" color="#a855f7" />
+      </div>
+
+      {/* ── Dashboard: average scores ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <StatTile label="Avg Urgency" value={fmtAvg(avgOf("Urgency"))} sub="out of 10" color="#fb923c" />
+        <StatTile label="Avg Importance" value={fmtAvg(avgOf("Importance"))} sub="out of 10" color="#facc15" />
+        <StatTile label="Avg Relevance" value={fmtAvg(avgOf("Relevance"))} sub="out of 10" color="#34d399" />
+        <StatTile label="Avg Difficulty" value={fmtAvg(avgOf("Difficulty"))} sub="out of 10" color="#c084fc" />
+      </div>
     </div>
-  );
-}
-
-function StatsCard({ task, rank, isExiting, getVal, adjustProp, propertyModes, propertyOrder, onComplete, onDelete, onPostpone, prefersReduced, evalMode, isSelected, toggleSelection }) {
-  const spring = { type: "spring", stiffness: 380, damping: 38 };
-
-  const heat      = heatOf(getVal(task, "Urgency"), getVal(task, "Importance"));
-  const heatColor = heatColorOf(heat);
-
-  return (
-    <motion.div layout={!prefersReduced} layoutId={task.Task_ID}
-      initial={{ opacity: 0, x: -20, scale: 0.98 }}
-      animate={isExiting ? { opacity: 0, x: 120, scale: 0.92 } : { opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 120, scale: 0.9 }}
-      transition={prefersReduced ? { duration: 0 } : { ...spring, layout: spring }}
-      className={`mb-3 rounded-2xl overflow-hidden transition-colors ${evalMode && isSelected ? "ring-2 ring-purple-500" : ""}`}
-      style={{ background: evalMode && isSelected ? "#1e1b4b" : "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${heatColor}` }}>
-
-      {/* Header */}
-      <div className={`flex items-center gap-3 px-4 py-3 ${evalMode ? "cursor-pointer" : ""}`}
-        onClick={() => evalMode && toggleSelection(task.Task_ID)}>
-        {evalMode ? (
-          <div className={`w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg border-2 ${isSelected ? 'border-purple-500 bg-purple-500' : 'border-gray-600'}`}>
-            {isSelected && <span className="text-white text-xs">✓</span>}
-          </div>
-        ) : (
-          <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
-            style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
-        )}
-
-        <motion.button whileTap={{ scale: 0.7 }} onClick={(e) => { e.stopPropagation(); onComplete(task.Task_ID); }} title="Mark complete"
-          className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
-          style={{ borderColor: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4ade80")}
-          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#334155")} />
-
-        <div className="flex-1 min-w-0">
-          <p className="text-white text-sm font-bold leading-snug truncate">{task.Name}</p>
-          {task.Context && <p className="text-gray-600 text-xs mt-0.5 truncate">{task.Context}</p>}
-        </div>
-
-        <div className="flex items-center gap-1 flex-shrink-0" title="Focus score — urgency × importance">
-          <span className="text-[8px] font-black tracking-widest uppercase" style={{ color: heatColor }}>Focus</span>
-          <span className="text-[11px] font-black px-2 py-0.5 rounded-lg"
-            style={{ background: `${heatColor}22`, color: heatColor }}>{heat * 10}%</span>
-        </div>
-
-        <button onClick={(e) => { e.stopPropagation(); onPostpone(task); }} title="Postpone until tomorrow"
-          className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
-
-        <button onClick={(e) => { e.stopPropagation(); onDelete(task.Task_ID); }} title="Delete"
-          className="flex-shrink-0 text-xs transition-colors ml-1" style={{ color: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✕</button>
-      </div>
-
-      {/* Scores — always visible, this is the point of the Stats tab */}
-      <div className="px-4 pb-4 pt-1 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2"
-        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-        {(propertyOrder || SCORING_PROP_KEYS)
-          .map(key => PROPERTIES.find(p => p.key === key))
-          .filter(Boolean)
-          .map(({ key, label, hex, bar }) => (
-            <PropertyControl
-              key={key}
-              label={label}
-              value={getVal(task, key)}
-              hex={hex}
-              bar={bar}
-              propKey={key}
-              mode={propertyModes[key]}
-              onDec={() => adjustProp(task.Task_ID, key, -1)}
-              onInc={() => adjustProp(task.Task_ID, key, 1)}
-              onSet={(v) => adjustProp(task.Task_ID, key, 0, v)}
-            />
-          ))}
-      </div>
-    </motion.div>
   );
 }
 
