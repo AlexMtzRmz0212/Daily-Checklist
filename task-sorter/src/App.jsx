@@ -4,6 +4,46 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext } f
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
 import { fetchApi } from "./utils/api";
 
+// Self-contained BitToByte family cross-link footer (plain inline styles — no
+// dependency on the Tailwind-4 ui library, which this Tailwind-3 app can't ingest).
+function BrandFooter() {
+  const links = [
+    { label: "BitToByte", href: "https://bittobyte.qzz.io" },
+    { label: "Portfolio", href: "https://alex.bittobyte.qzz.io" },
+    { label: "Express Entry", href: "https://EE.bittobyte.qzz.io" },
+    { label: "AI Checklist", href: "https://checklist.bittobyte.qzz.io" },
+  ];
+  return (
+    <footer
+      style={{
+        borderTop: "1px solid rgba(255,255,255,0.06)",
+        background: "#030712",
+        padding: "24px 16px",
+        textAlign: "center",
+        fontSize: 13,
+        color: "#9ca3af",
+      }}
+    >
+      <div style={{ marginBottom: 8 }}>
+        © {new Date().getFullYear()} BitToByte
+      </div>
+      <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+        {links.map((l) => (
+          <a
+            key={l.href}
+            href={l.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#9ca3af", textDecoration: "none" }}
+          >
+            {l.label}
+          </a>
+        ))}
+      </div>
+    </footer>
+  );
+}
+
 const API = import.meta.env.DEV ? "http://localhost:8000" : "/api";
 
 const PROPERTIES = [
@@ -2656,5 +2696,10 @@ export default function App() {
     );
   }
 
-  return isAuthenticated ? <MainApp /> : <AuthApp />;
+  return (
+    <>
+      {isAuthenticated ? <MainApp /> : <AuthApp />}
+      <BrandFooter />
+    </>
+  );
 }

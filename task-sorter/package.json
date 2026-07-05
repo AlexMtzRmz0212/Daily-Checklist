@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@alex_mtz/bittobyte-ui": "^0.2.0",
     "framer-motion": "^12.38.0",
+    "lucide-react": "^1.23.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
