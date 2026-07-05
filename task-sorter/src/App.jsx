@@ -1,7 +1,12 @@
 // task-sorter/src/App.jsx
 
-import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
+import {
+  ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
+  useNodesState, useEdgesState, useReactFlow, Handle, Position,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import { fetchApi } from "./utils/api";
 
 // Self-contained BitToByte family cross-link footer (plain inline styles — no
@@ -108,6 +113,40 @@ function parseBulkText(text) {
     .filter((t) => t.Name);
 }
 
+// Little "?" badge that reveals the mathematical sort order on hover.
+function SortInfo() {
+  const steps = [
+    ["Urgency × Importance", "high → low"],
+    ["Hierarchy", "1 = highest"],
+    ["Priority", "1 = highest"],
+    ["Time", "shorter favored"],
+    ["Relevance", "high → low"],
+  ];
+  return (
+    <div className="relative group flex items-center">
+      <span
+        title="Sort order: Urgency×Importance → Hierarchy → Priority → Time → Relevance"
+        className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-black cursor-help select-none"
+        style={{ background: "rgba(124,58,237,0.2)", border: "1px solid rgba(124,58,237,0.45)", color: "#c4b5fd" }}>
+        ?
+      </span>
+      <div
+        className="absolute right-0 top-7 z-50 hidden group-hover:block w-64 p-3 rounded-xl text-[11px] leading-relaxed shadow-2xl"
+        style={{ background: "#0f172a", border: "1px solid rgba(124,58,237,0.35)", color: "#cbd5e1" }}>
+        <p className="font-black text-purple-300 mb-2 uppercase tracking-wider text-[10px]">Sort logic</p>
+        <ol className="space-y-1">
+          {steps.map(([label, hint], i) => (
+            <li key={label} className="flex gap-2">
+              <span className="text-purple-400 font-black">{i + 1}.</span>
+              <span><span className="text-gray-200">{label}</span> <span className="text-gray-500">({hint})</span></span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //region Root App
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,10 +237,19 @@ function MainApp() {
 
   const [revalPhase, setRevalPhase] = useState("idle");
   const [revalError, setRevalError] = useState("");
+  const [revalTotal, setRevalTotal] = useState(0);
+  const [revalResults, setRevalResults] = useState([]); // [{ task_id, name, ok, error }]
+  const revalDone = revalResults.length;
+  const revalFailed = revalResults.filter((r) => !r.ok).length;
 
   const [postponeTarget, setPostponeTarget] = useState(null);
   const [postponeReason, setPostponeReason] = useState("");
   const [postponePhase, setPostponePhase]   = useState("idle");
+
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm]     = useState({ name: "", context: "" });
+  const [editPhase, setEditPhase]   = useState("idle");
+  const [editError, setEditError]   = useState("");
 
   const [sortError, setSortError] = useState("");
 
@@ -429,31 +477,67 @@ function MainApp() {
     }
   };
 
+  // Stream re-evaluation: read NDJSON events as each task is scored so the overlay can
+  // show live per-task progress (and per-task failures) instead of a blind spinner.
   const handleReeval = async () => {
     if (!tasks.length) return;
     setRevalPhase("loading"); setRevalError("");
+    setRevalTotal(selectedTasks.size > 0 ? selectedTasks.size : tasks.length);
+    setRevalResults([]);
     revalAbortCtrl.current = new AbortController();
     const { signal } = revalAbortCtrl.current;
+
+    const token = localStorage.getItem("token");
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
     try {
-      let updated;
-      if (selectedTasks.size > 0) {
-        updated = await apiFetch("/tasks/reevaluate-selected", {
-          method: "POST",
-          body: JSON.stringify({ task_ids: Array.from(selectedTasks) }),
-          signal,
-        });
-      } else {
-        updated = await apiFetch("/tasks/reevaluate-all", { method: "POST", signal });
-      }
-      if (signal.aborted) return;
-      setTasks((p) => {
-        const pMap = new Map(p.map(t => [t.Task_ID, t]));
-        updated.forEach(t => pMap.set(t.Task_ID, t));
-        return Array.from(pMap.values());
+      const res = await fetch(`${API}/tasks/reevaluate-stream`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task_ids: selectedTasks.size > 0 ? Array.from(selectedTasks) : [] }),
+        signal,
       });
-      setLocalEdits({}); setRevalPhase("idle");
-      setEvalMode(false);
+      if (res.status === 401) { localStorage.removeItem("token"); window.location.reload(); return; }
+      if (!res.ok || !res.body) throw new Error(`API Error (${res.status}): ${await res.text()}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let sawFailure = false;
+
+      const applyEvent = (evt) => {
+        if (evt.type === "start") {
+          setRevalTotal(evt.total);
+          setRevalResults([]);
+        } else if (evt.type === "task") {
+          setRevalResults((r) => [...r, { task_id: evt.task_id, name: evt.name, ok: evt.ok, error: evt.error }]);
+          if (!evt.ok) sawFailure = true;
+          if (evt.ok) {
+            const skip = new Set(["type", "task_id", "name", "ok", "error"]);
+            const metrics = Object.fromEntries(Object.entries(evt).filter(([k]) => !skip.has(k)));
+            setTasks((p) => p.map((t) => (t.Task_ID === evt.task_id ? { ...t, ...metrics } : t)));
+          }
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (line) applyEvent(JSON.parse(line));
+        }
+      }
+
+      setLocalEdits({});
       setSelectedTasks(new Set());
+      setEvalMode(false);
+      // Leave the overlay open on partial failure so the user sees which tasks failed.
+      setRevalPhase(sawFailure ? "done" : "idle");
     } catch (e) {
       if (e.name === "AbortError" || signal?.aborted) { setRevalPhase("idle"); return; }
       setRevalError(e.message); setRevalPhase("error");
@@ -461,6 +545,7 @@ function MainApp() {
   };
 
   const handleCancelReeval = () => { revalAbortCtrl.current?.abort(); setRevalPhase("idle"); };
+  const handleCloseReeval  = () => { setRevalPhase("idle"); setRevalResults([]); };
 
   const toggleTaskSelection = useCallback((taskId) => {
     setSelectedTasks(prev => {
@@ -539,6 +624,26 @@ function MainApp() {
 
   const openPostpone = (task) => { setPostponeTarget(task); setPostponeReason(""); setPostponePhase("idle"); };
 
+  const openEdit = useCallback((task) => {
+    setEditTarget(task);
+    setEditForm({ name: task.Name || "", context: task.Context || "" });
+    setEditPhase("idle"); setEditError("");
+  }, []);
+
+  const handleEditSave = async () => {
+    if (!editTarget || !editForm.name.trim()) return;
+    setEditPhase("loading"); setEditError("");
+    try {
+      const updated = await apiFetch(`/tasks/${editTarget.Task_ID}`, {
+        method: "PUT",
+        body: JSON.stringify({ Name: editForm.name.trim(), Context: editForm.context.trim() }),
+      });
+      setTasks((p) => p.map((t) => (t.Task_ID === updated.Task_ID ? { ...t, ...updated } : t)));
+      setTreeRefresh((n) => n + 1); // keep the tree in sync with renamed nodes
+      setEditTarget(null);
+    } catch (e) { setEditError(e.message); setEditPhase("error"); }
+  };
+
   const confirmPostpone = async () => {
     if (!postponeTarget) return;
     setPostponePhase("loading");
@@ -587,14 +692,17 @@ function MainApp() {
       {/* Top Right Controls */}
       <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
         {tasks.length > 1 && (
-          <motion.button
-            initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-            onClick={handleSort} disabled={isSorting}
-            className="px-6 h-10 rounded-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
-            style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
-            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-            {isSorting ? <span className="flex items-center gap-2"><Spinner /> SORTING…</span> : "⚡SORT/💾SAVE"}
-          </motion.button>
+          <div className="relative group flex items-center gap-1.5">
+            <motion.button
+              initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+              onClick={handleSort} disabled={isSorting}
+              className="px-6 h-10 rounded-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
+              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              {isSorting ? <span className="flex items-center gap-2"><Spinner /> SORTING…</span> : "⚡SORT/💾SAVE"}
+            </motion.button>
+            <SortInfo />
+          </div>
         )}
         <motion.button
           initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
@@ -608,8 +716,8 @@ function MainApp() {
           initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
           onClick={() => { localStorage.removeItem("token"); window.location.reload(); }}
           title="Log out"
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm opacity-50 hover:opacity-100 transition-opacity"
-          style={{ background: "rgba(15,23,42,0.6)", border: "1px solid rgba(255,255,255,0.08)", color: "#64748b", backdropFilter: "blur(8px)" }}
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm opacity-80 hover:opacity-100 transition-opacity"
+          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", backdropFilter: "blur(8px)" }}
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
           ⎋
         </motion.button>
@@ -838,23 +946,72 @@ function MainApp() {
         )}
       </AnimatePresence>
 
-      {/* Re-evaluate overlay */}
+      {/* Re-evaluate overlay — live per-task progress */}
       <AnimatePresence>
-        {isRevaluating && (
+        {(revalPhase === "loading" || revalPhase === "done") && (
           <motion.div key="reval-ov" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-8"
-            style={{ background: "rgba(2,6,23,0.82)", backdropFilter: "blur(8px)" }}>
-            <SpinRing color="purple" />
-            <div className="text-center">
-              <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Re-evaluating</p>
-              <p className="text-gray-600 text-xs tracking-widest">rescoring {tasks.length} tasks in parallel…</p>
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 px-4"
+            style={{ background: "rgba(2,6,23,0.88)", backdropFilter: "blur(8px)" }}>
+            <div className="flex items-center gap-4">
+              {revalPhase === "loading" && <SpinRing color="purple" />}
+              <div>
+                <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">
+                  {revalPhase === "loading" ? "Re-evaluating" : "Re-evaluation complete"}
+                </p>
+                <p className="text-gray-500 text-xs tracking-widest">
+                  {revalDone} / {revalTotal} scored{revalFailed ? ` · ${revalFailed} failed` : ""}
+                </p>
+              </div>
             </div>
-            <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
-              whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleCancelReeval}
-              className="px-8 py-3 rounded-xl font-black text-sm tracking-[0.25em] uppercase border"
-              style={{ background: "rgba(220,38,38,0.15)", borderColor: "rgba(220,38,38,0.5)", color: "#fca5a5" }}>
-              ✕ CANCEL
-            </motion.button>
+
+            {/* Progress bar */}
+            <div className="w-full max-w-md h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
+              <motion.div
+                className="h-full"
+                style={{ background: revalFailed ? "linear-gradient(90deg,#a855f7,#ef4444)" : "linear-gradient(90deg,#7c3aed,#22d3ee)" }}
+                initial={{ width: 0 }}
+                animate={{ width: `${revalTotal ? (revalDone / revalTotal) * 100 : 0}%` }}
+                transition={{ duration: 0.3 }} />
+            </div>
+
+            {/* Per-task status list */}
+            <div className="w-full max-w-md max-h-64 overflow-y-auto rounded-xl p-2 space-y-1"
+              style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              {revalResults.length === 0 && (
+                <p className="text-gray-600 text-xs text-center py-4">Starting…</p>
+              )}
+              {revalResults.map((r) => (
+                <div key={r.task_id} className="flex items-start gap-2 px-2 py-1 text-xs">
+                  <span className={r.ok ? "text-emerald-400" : "text-red-400"}>{r.ok ? "✓" : "⚠"}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="text-gray-300 truncate block">{r.name}</span>
+                    {!r.ok && <span className="text-red-400/80 text-[10px]">{r.error}</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {revalPhase === "loading" ? (
+              <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleCancelReeval}
+                className="px-8 py-3 rounded-xl font-black text-sm tracking-[0.25em] uppercase border"
+                style={{ background: "rgba(220,38,38,0.15)", borderColor: "rgba(220,38,38,0.5)", color: "#fca5a5" }}>
+                ✕ CANCEL
+              </motion.button>
+            ) : (
+              <div className="text-center">
+                {revalFailed > 0 && (
+                  <p className="text-amber-400/90 text-xs mb-3">
+                    {revalFailed} task{revalFailed !== 1 ? "s" : ""} failed — check your OpenRouter model &amp; API credits.
+                  </p>
+                )}
+                <motion.button whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleCloseReeval}
+                  className="px-8 py-3 rounded-xl font-black text-sm tracking-[0.25em] uppercase border"
+                  style={{ background: "rgba(124,58,237,0.15)", borderColor: "rgba(124,58,237,0.5)", color: "#c4b5fd" }}>
+                  ✓ CLOSE
+                </motion.button>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -915,6 +1072,61 @@ function MainApp() {
                     : "⏰ POSTPONE UNTIL TOMORROW"}
                 </ModalBtn>
                 <ModalBtn onClick={() => setPostponeTarget(null)} accent="gray">CANCEL</ModalBtn>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit task modal */}
+      <AnimatePresence>
+        {editTarget && (
+          <motion.div key="edit-bd" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center"
+            style={{ background: "rgba(2,6,23,0.9)" }}
+            onClick={() => setEditTarget(null)}>
+            <motion.div initial={{ scale: 0.85, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.85, opacity: 0, y: 24 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="w-full max-w-sm mx-4 rounded-2xl p-8"
+              style={{ background: "#0f172a", border: "1px solid rgba(6,182,212,0.3)" }}
+              onClick={(e) => e.stopPropagation()}>
+              <p className="text-cyan-400 text-xs tracking-[0.3em] uppercase mb-1">✎ EDIT TASK</p>
+              <h2 className="text-white text-lg font-black mb-5">Rename &amp; re-context</h2>
+
+              <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">Task name</label>
+              <input
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && handleEditSave()}
+                placeholder="Task name…"
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none mb-4"
+                style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
+                onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
+                onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
+
+              <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">Context</label>
+              <textarea
+                value={editForm.context}
+                onChange={(e) => setEditForm((f) => ({ ...f, context: e.target.value }))}
+                placeholder="Context / description…"
+                rows={3}
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none resize-none mb-2"
+                style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
+                onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
+                onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
+              <p className="text-gray-600 text-[10px] mb-5">
+                Editing names/context does not re-score the task — use ↺ Evaluate for that.
+              </p>
+
+              {editError && <p className="text-red-400 text-xs mb-3">⚠ {editError}</p>}
+
+              <div className="flex flex-col gap-3">
+                <ModalBtn onClick={handleEditSave} accent="cyan" disabled={editPhase === "loading" || !editForm.name.trim()}>
+                  {editPhase === "loading"
+                    ? <span className="flex items-center justify-center gap-2"><Spinner /> SAVING…</span>
+                    : "💾 SAVE CHANGES"}
+                </ModalBtn>
+                <ModalBtn onClick={() => setEditTarget(null)} accent="gray">CANCEL</ModalBtn>
               </div>
             </motion.div>
           </motion.div>
@@ -1075,7 +1287,7 @@ function MainApp() {
             hasTasks={tasks.length > 0}
           />
         ) : viewMode === "tree" ? (
-          <TreeView refreshSignal={treeRefresh} />
+          <TreeView refreshSignal={treeRefresh} onEdit={openEdit} />
         ) : viewMode === "matrix" ? (
           <MatrixView tasks={tasks} onPersist={handleMatrixPersist} />
         ) : viewMode === "subtasks" ? (
@@ -1091,6 +1303,7 @@ function MainApp() {
                   onComplete={handleComplete}
                   onDelete={handleDelete}
                   onPostpone={openPostpone}
+                  onEdit={openEdit}
                   onSubtaskAdded={handleSubtaskAdded}
                   onSubtaskToggled={handleSubtaskToggled}
                   onSubtaskDeleted={handleSubtaskDeleted}
@@ -1117,6 +1330,7 @@ function MainApp() {
             onComplete={handleComplete}
             onDelete={handleDelete}
             onPostpone={openPostpone}
+            onEdit={openEdit}
             onSubtaskAdded={handleSubtaskAdded}
             onSubtaskToggled={handleSubtaskToggled}
             onSubtaskDeleted={handleSubtaskDeleted}
@@ -1275,66 +1489,95 @@ function StatusPill({ status }) {
 }
 
 // A folded-in Notion leaf: rendered from the parent task's Subtasks JSON, not a row.
-function SubtaskLeaf({ subtask }) {
-  return (
-    <div className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white/5 transition-colors" style={{ marginLeft: 16 }}>
-      <span className={`text-xs w-4 text-center ${subtask.done ? "text-emerald-400" : "text-gray-600"}`}>
-        {subtask.done ? "✔" : "◻"}
-      </span>
-      <span className={`text-sm ${subtask.done ? "text-gray-500 line-through" : "text-gray-300"}`}>
-        {subtask.name}
-      </span>
-    </div>
-  );
-}
-
-function TreeNode({ id, nodeMap, depth }) {
-  const [open, setOpen] = useState(depth === 0);
-  const task = nodeMap.get(id);
-  if (!task) return null;
-
-  // "category" = structural node (major category / label). "task" = a real task
-  // whose Notion leaves are folded into its Subtasks. Fall back to task.
+// Custom React Flow node: a task/category card with a collapse toggle and edit button.
+function TaskFlowNode({ data }) {
+  const { task, collapsed, hasChildren, childCount, onToggle, onEdit } = data;
   const isCategory = task.Node_Type === "category";
-  const subtasks   = task.Subtasks || [];
-  const childRows  = task.children;                    // nested task/category rows
-  const childCount = childRows.length + subtasks.length;
-  const hasChildren = childCount > 0;
-
+  const accent = isCategory ? "#f59e0b" : "#22d3ee";
+  const subCount = task.Subtasks?.length || 0;
   return (
-    <div style={{ marginLeft: depth === 0 ? 0 : 16 }}>
-      <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/5 transition-colors">
+    <div className="rounded-xl px-3 py-2 shadow-lg"
+      style={{ width: 190, background: "#0f172a", border: `1px solid ${accent}55`, borderLeft: `3px solid ${accent}` }}>
+      <Handle id="t" type="target" position={Position.Top} style={{ opacity: 0 }} />
+      <div className="flex items-center gap-1.5">
         {hasChildren ? (
-          <button onClick={() => setOpen((o) => !o)} className="text-gray-500 hover:text-white text-xs w-4 text-center">
-            {open ? "▾" : "▸"}
-          </button>
-        ) : (
-          <span className="text-gray-600 text-xs w-4 text-center">◾</span>
-        )}
-        <span className={`text-sm ${isCategory ? "text-white font-bold" : "text-gray-200"}`}>
-          {isCategory ? "📁 " : "📋 "}{task.Name}
+          <button className="nodrag text-gray-400 hover:text-white text-xs w-4 text-center"
+            onClick={(e) => { e.stopPropagation(); onToggle(task.Task_ID); }}
+            title={collapsed ? "Expand" : "Collapse"}>{collapsed ? "▸" : "▾"}</button>
+        ) : <span className="text-gray-700 text-xs w-4 text-center">◦</span>}
+        <span className="text-sm flex-1 min-w-0 truncate"
+          style={{ color: isCategory ? "#fff" : "#e2e8f0", fontWeight: isCategory ? 700 : 500 }}>
+          {isCategory ? "📁" : "📋"} {task.Name}
         </span>
-        <StatusPill status={task.Status} />
-        {hasChildren && <span className="text-[10px] text-gray-600">{childCount}</span>}
+        <button className="nodrag text-[11px] text-gray-500 hover:text-cyan-300" title="Edit name / context"
+          onClick={(e) => { e.stopPropagation(); onEdit?.(task); }}>✎</button>
       </div>
-      {hasChildren && open && (
-        <div className="border-l border-white/5 ml-2">
-          {childRows.map((cid) => (
-            <TreeNode key={cid} id={cid} nodeMap={nodeMap} depth={depth + 1} />
-          ))}
-          {subtasks.map((s) => (
-            <SubtaskLeaf key={s.id} subtask={s} />
-          ))}
-        </div>
-      )}
+      <div className="flex items-center gap-2 mt-1 flex-wrap">
+        <StatusPill status={task.Status} />
+        {childCount > 0 && <span className="text-[9px] text-gray-600">{childCount} child{childCount !== 1 ? "ren" : ""}</span>}
+        {subCount > 0 && <span className="text-[9px] text-gray-600">· {subCount} sub</span>}
+      </div>
+      <Handle id="s" type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
 }
 
-function TreeView({ refreshSignal }) {
-  const [tasks, setTasks]   = useState([]);
-  const [phase, setPhase]   = useState("loading"); // loading | ready | error
-  const [error, setError]   = useState("");
+const treeNodeTypes = { task: TaskFlowNode };
+
+// Full set of descendant ids for a node (used to forbid dropping a node onto its own subtree).
+function descendantsOf(nodeMap, id) {
+  const out = new Set();
+  const stack = [...(nodeMap.get(id)?.children || [])];
+  while (stack.length) {
+    const c = stack.pop();
+    if (out.has(c)) continue;
+    out.add(c);
+    stack.push(...(nodeMap.get(c)?.children || []));
+  }
+  return out;
+}
+
+// Simple tidy top-down layout: leaves fill columns left→right; a parent centers over its
+// visible children. Collapsed nodes contribute no children.
+function computeTreeLayout(nodeMap, roots, collapsed) {
+  const X_GAP = 210, Y_GAP = 130;
+  const pos = {};
+  let cursor = 0;
+  const kidsOf = (id) => (collapsed.has(id) ? [] : (nodeMap.get(id)?.children || []));
+  const place = (id, depth) => {
+    const kids = kidsOf(id);
+    if (!kids.length) {
+      pos[id] = { x: cursor * X_GAP, y: depth * Y_GAP };
+      cursor += 1;
+      return pos[id].x;
+    }
+    const xs = kids.map((c) => place(c, depth + 1));
+    pos[id] = { x: (xs[0] + xs[xs.length - 1]) / 2, y: depth * Y_GAP };
+    return pos[id].x;
+  };
+  roots.forEach((r) => place(r, 0));
+  return pos;
+}
+
+// Public entry — wraps the canvas in a provider so useReactFlow() works inside.
+function TreeView({ refreshSignal, onEdit }) {
+  return (
+    <ReactFlowProvider>
+      <TreeCanvasInner refreshSignal={refreshSignal} onEdit={onEdit} />
+    </ReactFlowProvider>
+  );
+}
+
+function TreeCanvasInner({ refreshSignal, onEdit }) {
+  const [tasks, setTasks]         = useState([]);
+  const [phase, setPhase]         = useState("loading"); // loading | ready | error
+  const [error, setError]         = useState("");
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const [msg, setMsg]             = useState("");
+
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const { getIntersectingNodes } = useReactFlow();
 
   const load = useCallback(() => {
     setPhase("loading"); setError("");
@@ -1342,8 +1585,77 @@ function TreeView({ refreshSignal }) {
       .then((data) => { setTasks(data); setPhase("ready"); })
       .catch((e) => { setError(e.message); setPhase("error"); });
   }, []);
-
   useEffect(() => { load(); }, [load, refreshSignal]);
+
+  const { nodeMap, roots } = useMemo(() => buildTree(tasks), [tasks]);
+
+  const toggle = useCallback((id) => setCollapsed((prev) => {
+    const n = new Set(prev);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  }), []);
+
+  // Translate the task tree into React Flow nodes/edges for the current collapse state.
+  const buildGraph = useCallback(() => {
+    const pos = computeTreeLayout(nodeMap, roots, collapsed);
+    const rfNodes = Object.keys(pos).map((id) => {
+      const t = nodeMap.get(id);
+      return {
+        id, type: "task", position: pos[id],
+        sourcePosition: Position.Bottom, targetPosition: Position.Top,
+        data: { task: t, collapsed: collapsed.has(id), hasChildren: t.children.length > 0,
+                childCount: t.children.length, onToggle: toggle, onEdit },
+      };
+    });
+    const rfEdges = [];
+    for (const id of Object.keys(pos)) {
+      if (collapsed.has(id)) continue;
+      for (const c of (nodeMap.get(id)?.children || [])) {
+        if (pos[c]) rfEdges.push({ id: `${id}->${c}`, source: id, target: c,
+                                   sourceHandle: "s", targetHandle: "t", type: "smoothstep",
+                                   style: { stroke: "rgba(148,163,184,0.4)" } });
+      }
+    }
+    return { rfNodes, rfEdges };
+  }, [nodeMap, roots, collapsed, toggle, onEdit]);
+
+  useEffect(() => {
+    const { rfNodes, rfEdges } = buildGraph();
+    // Preserve React Flow's per-node measurement across rebuilds — otherwise replacing the
+    // node objects wipes `measured`, leaving nodes hidden and edges undrawn.
+    setNodes((prev) => {
+      const prevById = new Map(prev.map((n) => [n.id, n]));
+      return rfNodes.map((n) => {
+        const p = prevById.get(n.id);
+        return p ? { ...n, measured: p.measured, width: p.width, height: p.height } : n;
+      });
+    });
+    setEdges(rfEdges);
+  }, [buildGraph, setNodes, setEdges]);
+
+  const reparent = useCallback(async (childId, parentId) => {
+    try {
+      const res = await apiFetch(`/tasks/${childId}/parent`, {
+        method: "PATCH", body: JSON.stringify({ parent_id: parentId }),
+      });
+      setMsg(res.notion_synced === false ? "⚠ Moved locally — Notion sync failed." : "✓ Moved.");
+      load();
+    } catch (e) { setMsg(`⚠ Move failed: ${e.message}`); load(); }
+  }, [load]);
+
+  const onNodeDragStop = useCallback((_evt, node) => {
+    const hits = getIntersectingNodes(node).filter((n) => n.id !== node.id);
+    const target = hits[0];
+    const banned = descendantsOf(nodeMap, node.id);
+    const currentParent = nodeMap.get(node.id)?.Parent_ID;
+    if (!target || target.id === currentParent || banned.has(target.id)) {
+      const { rfNodes } = buildGraph();   // invalid/no-op drop → snap back to layout
+      setNodes(rfNodes);
+      if (target && banned.has(target.id)) setMsg("⚠ Can't move a node under its own descendant.");
+      return;
+    }
+    reparent(node.id, target.id);
+  }, [getIntersectingNodes, nodeMap, buildGraph, setNodes, reparent]);
 
   if (phase === "loading") {
     return <div className="text-center py-24 text-gray-500 text-sm flex items-center justify-center gap-3"><Spinner /> Loading tree…</div>;
@@ -1361,27 +1673,40 @@ function TreeView({ refreshSignal }) {
     );
   }
 
-  const { nodeMap, roots } = buildTree(tasks);
   const categoryCount = tasks.filter((t) => t.Node_Type === "category").length;
   const taskCount     = tasks.length - categoryCount;
   const subtaskCount  = tasks.reduce((n, t) => n + (t.Subtasks?.length || 0), 0);
 
   return (
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
-      <div className="flex items-center justify-between">
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
-        <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
+        <div className="flex items-center gap-3">
+          {msg && <span className={`text-[10px] ${msg.startsWith("⚠") ? "text-amber-400" : "text-emerald-400"}`}>{msg}</span>}
+          <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
+        </div>
       </div>
 
-      {/* Full tree */}
-      <section>
-        <h3 className="text-emerald-400 text-xs font-black tracking-widest uppercase mb-3">🌲 Full Tree</h3>
-        <div className="rounded-xl p-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-          {roots.map((rid) => (
-            <TreeNode key={rid} id={rid} nodeMap={nodeMap} depth={0} />
-          ))}
-        </div>
-      </section>
+      <div className="rounded-xl overflow-hidden" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+        <ReactFlow
+          nodes={nodes} edges={edges}
+          onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+          onNodeDragStop={onNodeDragStop}
+          nodeTypes={treeNodeTypes}
+          nodesConnectable={false}
+          fitView minZoom={0.15}
+          proOptions={{ hideAttribution: false }}>
+          <Background color="rgba(148,163,184,0.15)" gap={24} />
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable
+            nodeColor={(n) => (n.data?.task?.Node_Type === "category" ? "#f59e0b" : "#22d3ee")}
+            style={{ background: "#0f172a" }} maskColor="rgba(2,6,23,0.6)" />
+        </ReactFlow>
+      </div>
+
+      <p className="text-[10px] text-gray-700">
+        Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · ✎ to edit · scroll to zoom.
+      </p>
     </motion.div>
   );
 }
@@ -1609,7 +1934,7 @@ function MatrixView({ tasks, onPersist }) {
 // ─────────────────────────────────────────────────────────────────────────────
 //region TaskTable
 
-function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection }) {
+function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection }) {
   const [expandedTask, setExpandedTask] = useState(null);
 
   const SortIcon = ({ column }) => {
@@ -1664,6 +1989,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
               onComplete={onComplete}
               onDelete={onDelete}
               onPostpone={onPostpone}
+              onEdit={onEdit}
               onSubtaskAdded={onSubtaskAdded}
               onSubtaskToggled={onSubtaskToggled}
               onSubtaskDeleted={onSubtaskDeleted}
@@ -1685,7 +2011,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
 //  TaskTableRow
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, propertyOrder, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, isSelected, toggleSelection }) {
+function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, propertyOrder, isExpanded, onToggleExpand, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, isSelected, toggleSelection }) {
 
   const PropertyCell = ({ propKey }) => {
     const value = getVal(task, propKey);
@@ -1802,6 +2128,9 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
               title="Complete">
               <span className="text-xs text-green-400">✓</span>
             </motion.button>
+            <button onClick={() => onEdit(task)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-sm hover:bg-cyan-500/20 transition-colors"
+              style={{ color: "#22d3ee" }} title="Edit name / context">✎</button>
             <button onClick={() => onPostpone(task)}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-sm hover:bg-orange-500/20 transition-colors"
               style={{ color: "#fb923c" }} title="Postpone">⏰</button>
@@ -1854,7 +2183,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
 //  TaskCard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostpone, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
+function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
   const spring = { type: "spring", stiffness: 380, damping: 38 };
 
   const subtasks = task.Subtasks || [];
@@ -1901,8 +2230,13 @@ function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostp
           <span className="text-[9px] font-black tracking-widest uppercase text-gray-700 flex-shrink-0">No subtasks yet</span>
         )}
 
-        <button onClick={() => onPostpone(task)} title="Postpone until tomorrow"
+        <button onClick={() => onEdit(task)} title="Edit name / context"
           className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#22d3ee")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✎</button>
+
+        <button onClick={() => onPostpone(task)} title="Postpone until tomorrow"
+          className="flex-shrink-0 text-sm transition-colors ml-1" style={{ color: "#334155" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
 

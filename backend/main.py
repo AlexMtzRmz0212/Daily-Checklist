@@ -16,6 +16,7 @@ from datetime                   import date, timedelta
 from typing                     import Any, Dict, List, Optional, Literal
 from fastapi                    import Body, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors    import CORSMiddleware
+from fastapi.responses          import StreamingResponse
 from fastapi.security           import OAuth2PasswordRequestForm
 from pydantic                   import BaseModel, Field
 from dotenv                     import load_dotenv
@@ -117,6 +118,9 @@ class SortRequest(BaseModel):
 
 class ReevaluateRequest(BaseModel):
     task_ids: List[str]
+
+class ParentUpdate(BaseModel):
+    parent_id: Optional[str] = None                      # None ⇒ detach (becomes a root)
 
 class PostponeRequest(BaseModel):
     reason: str = ""
@@ -397,23 +401,25 @@ async def _score_task(name: str, context: str, user: models.User) -> Dict[str, A
         except (TypeError, ValueError):
             return 30
 
+    # A real transport / credit / model failure (the HTTPException raised by
+    # _call_openrouter) must propagate so the caller can surface it — never fall
+    # through to defaults, which would masquerade as a successful evaluation.
+    raw = await _call_openrouter(_build_score_prompt(name, context, property_modes), user, max_tokens=300, temperature=0.15)
+
+    # Parse problems, by contrast, are recoverable: try to repair, else use defaults.
     metrics = _DEFAULTS.copy()
+    cleaned = _clean_json_fence(raw)
     try:
-        raw = await _call_openrouter(_build_score_prompt(name, context, property_modes), user, max_tokens=300, temperature=0.15)
-        cleaned = _clean_json_fence(raw)
-        try:
-            metrics = json.loads(cleaned)
-        except json.JSONDecodeError:
-            fixed_json = _attempt_fix_truncated_json(cleaned)
-            if fixed_json:
-                try:
-                    metrics = json.loads(fixed_json)
-                except json.JSONDecodeError:
-                    metrics = _DEFAULTS.copy()
-            else:
+        metrics = json.loads(cleaned)
+    except json.JSONDecodeError:
+        fixed_json = _attempt_fix_truncated_json(cleaned)
+        if fixed_json:
+            try:
+                metrics = json.loads(fixed_json)
+            except json.JSONDecodeError:
                 metrics = _DEFAULTS.copy()
-    except Exception as exc:
-        print(f"AI scoring failed for '{name}' ({type(exc).__name__}: {exc}) — using defaults.")
+        else:
+            metrics = _DEFAULTS.copy()
 
     result = {}
     for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
@@ -503,8 +509,11 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
-    access_token = auth.create_access_token(data={"sub": new_user.username})
+
+    access_token = auth.create_access_token(
+        data={"sub": new_user.username},
+        expires_delta=timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/login", response_model=Token)
@@ -516,7 +525,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = auth.create_access_token(data={"sub": user.username})
+    access_token = auth.create_access_token(
+        data={"sub": user.username},
+        expires_delta=timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/users/me")
@@ -944,6 +956,63 @@ async def reevaluate_selected(request: ReevaluateRequest, db: Session = Depends(
     db.commit()
     return [_task_to_dict(t) for t in tasks_to_eval]
 
+@app.post("/tasks/reevaluate-stream")
+async def reevaluate_stream(
+    payload: Optional[ReevaluateRequest] = Body(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Re-score tasks, streaming one NDJSON event per task as it finishes so the UI can
+    show live per-task progress (and per-task failures) instead of a blind spinner.
+
+    Events: {"type":"start","total":N} · {"type":"task","task_id","name","ok",...} ·
+    {"type":"done","ok":X,"failed":Y}."""
+    query = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id,
+        models.Task.Status == "Active",
+        models.Task.Node_Type == "task",
+    )
+    if payload and payload.task_ids:
+        query = query.filter(models.Task.Task_ID.in_(payload.task_ids))
+    tasks = query.all()
+
+    async def gen():
+        yield json.dumps({"type": "start", "total": len(tasks)}) + "\n"
+        if not tasks:
+            yield json.dumps({"type": "done", "ok": 0, "failed": 0}) + "\n"
+            return
+
+        async def score(task: models.Task):
+            # _call_openrouter already gates on _openrouter_semaphore, so launching all
+            # coroutines at once still respects OPENROUTER_MAX_CONCURRENCY.
+            try:
+                metrics = await _score_task(task.Name, task.Context or "", current_user)
+                return task, metrics, None
+            except HTTPException as exc:
+                return task, None, str(exc.detail)
+            except Exception as exc:  # network/other transport failure
+                return task, None, f"{type(exc).__name__}: {exc}"
+
+        ok = failed = 0
+        for coro in asyncio.as_completed([score(t) for t in tasks]):
+            task, metrics, error = await coro
+            if error is None:
+                for k, v in metrics.items():
+                    setattr(task, k, v)
+                ok += 1
+                event = {"type": "task", "task_id": task.Task_ID, "name": task.Name,
+                         "ok": True, **metrics}
+            else:
+                failed += 1
+                event = {"type": "task", "task_id": task.Task_ID, "name": task.Name,
+                         "ok": False, "error": error}
+            yield json.dumps(event) + "\n"
+
+        db.commit()
+        yield json.dumps({"type": "done", "ok": ok, "failed": failed}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
 @app.post("/tasks/sort")
 async def sort_tasks(request: SortRequest) -> Dict:
     if not request.tasks:
@@ -1073,6 +1142,60 @@ def update_task(task_id: str, update: TaskUpdate, db: Session = Depends(get_db),
     db.commit()
     db.refresh(task)
     return _task_to_dict(task)
+
+@app.patch("/tasks/{task_id}/parent")
+async def reparent_task(task_id: str, body: ParentUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    """Move a task under a new parent (or detach it). Persists locally and, when the task
+    and its new parent are both Notion-linked, syncs the parent relation back to Notion."""
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+
+    new_parent_id = body.parent_id
+    parent_task = None
+    if new_parent_id:
+        if new_parent_id == task_id:
+            raise HTTPException(status_code=400, detail="A task cannot be its own parent.")
+        parent_task = db.query(models.Task).filter(
+            models.Task.Task_ID == new_parent_id, models.Task.user_id == current_user.id
+        ).first()
+        if not parent_task:
+            raise HTTPException(status_code=404, detail=f"Parent {new_parent_id!r} not found")
+
+        # Reject cycles: the new parent must not be a descendant of this task.
+        all_tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+        children_of: Dict[str, List[str]] = {}
+        for t in all_tasks:
+            if t.Parent_ID:
+                children_of.setdefault(t.Parent_ID, []).append(t.Task_ID)
+        stack, descendants = list(children_of.get(task_id, [])), set()
+        while stack:
+            cur = stack.pop()
+            if cur in descendants:
+                continue
+            descendants.add(cur)
+            stack.extend(children_of.get(cur, []))
+        if new_parent_id in descendants:
+            raise HTTPException(status_code=400, detail="Cannot move a task under one of its own descendants.")
+
+    task.Parent_ID = new_parent_id
+    db.commit()
+    db.refresh(task)
+
+    notion_synced = None
+    cfg = get_notion_config(current_user)
+    if cfg["connected"] and task.Notion_Page_ID and (new_parent_id is None or (parent_task and parent_task.Notion_Page_ID)):
+        try:
+            await notion.update_page_parent(
+                cfg["token"], cfg["version"], task.Notion_Page_ID,
+                cfg["property_map"], parent_task.Notion_Page_ID if parent_task else None,
+            )
+            notion_synced = True
+        except Exception as exc:
+            notion_synced = False
+            print(f"Notion re-parent sync failed for {task_id}: {exc}")
+
+    return {**_task_to_dict(task), "notion_synced": notion_synced}
 
 @app.patch("/tasks/{task_id}/complete")
 def complete_task(task_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:

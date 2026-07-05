@@ -94,6 +94,23 @@ async def update_page_properties(
     )
 
 
+async def update_page_parent(
+    token: str,
+    version: str,
+    page_id: str,
+    prop_map: Dict[str, str],
+    parent_notion_id: Optional[str],
+) -> None:
+    """Rewrite a page's parent relation so a re-parent in the app reflects in Notion.
+
+    ``parent_notion_id=None`` clears the relation (the page becomes a root)."""
+    relation = [{"id": parent_notion_id}] if parent_notion_id else []
+    props = {prop_map.get("parent", "Parent item"): {"relation": relation}}
+    await _request(
+        "PATCH", f"/pages/{page_id}", token, version, {"properties": props}
+    )
+
+
 # ── Property extractors ──────────────────────────────────────────────────────
 
 def _rich_text(props: dict, key: str) -> str:
