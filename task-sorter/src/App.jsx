@@ -113,7 +113,7 @@ function parseBulkText(text) {
     .filter((t) => t.Name);
 }
 
-// Little "?" badge that reveals the mathematical sort order on hover.
+// Tooltip that reveals the mathematical sort order when the Sort button is hovered.
 function SortInfo() {
   const steps = [
     ["Urgency × Importance", "high → low"],
@@ -123,26 +123,18 @@ function SortInfo() {
     ["Relevance", "high → low"],
   ];
   return (
-    <div className="relative group flex items-center">
-      <span
-        title="Sort order: Urgency×Importance → Hierarchy → Priority → Time → Relevance"
-        className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-black cursor-help select-none"
-        style={{ background: "rgba(124,58,237,0.2)", border: "1px solid rgba(124,58,237,0.45)", color: "#c4b5fd" }}>
-        ?
-      </span>
-      <div
-        className="absolute right-0 top-7 z-50 hidden group-hover:block w-64 p-3 rounded-xl text-[11px] leading-relaxed shadow-2xl"
-        style={{ background: "#0f172a", border: "1px solid rgba(124,58,237,0.35)", color: "#cbd5e1" }}>
-        <p className="font-black text-purple-300 mb-2 uppercase tracking-wider text-[10px]">Sort logic</p>
-        <ol className="space-y-1">
-          {steps.map(([label, hint], i) => (
-            <li key={label} className="flex gap-2">
-              <span className="text-purple-400 font-black">{i + 1}.</span>
-              <span><span className="text-gray-200">{label}</span> <span className="text-gray-500">({hint})</span></span>
-            </li>
-          ))}
-        </ol>
-      </div>
+    <div
+      className="absolute right-0 top-12 z-50 hidden group-hover:block w-64 p-3 rounded-xl text-[11px] leading-relaxed shadow-2xl"
+      style={{ background: "#0f172a", border: "1px solid rgba(124,58,237,0.35)", color: "#cbd5e1" }}>
+      <p className="font-black text-purple-300 mb-2 uppercase tracking-wider text-[10px]">Sort logic</p>
+      <ol className="space-y-1">
+        {steps.map(([label, hint], i) => (
+          <li key={label} className="flex gap-2">
+            <span className="text-purple-400 font-black">{i + 1}.</span>
+            <span><span className="text-gray-200">{label}</span> <span className="text-gray-500">({hint})</span></span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
