@@ -73,6 +73,26 @@ async def fetch_all_pages(token: str, version: str, database_id: str) -> List[di
     return results
 
 
+async def fetch_page_title(token: str, version: str, page_id: str) -> Optional[str]:
+    """Best-effort read of a single page's title, used to resolve an @mention that
+    points at a page *outside* the imported database. Returns ``None`` if the page is
+    unreachable (e.g. the integration lacks access), so callers can fall back."""
+    try:
+        page = await _request("GET", f"/pages/{page_id}", token, version)
+    except httpx.HTTPStatusError as exc:
+        # 404 here usually means "not shared with this integration" (Notion hides
+        # existence), 403 means no access. Either way: share the page to fix it.
+        print(f"[notion] mention fetch {page_id} -> HTTP {exc.response.status_code} (integration likely lacks access)")
+        return None
+    except httpx.HTTPError as exc:
+        print(f"[notion] mention fetch {page_id} -> {exc}")
+        return None
+    title = _any_title(page.get("properties", {}))
+    if not title:
+        print(f"[notion] mention fetch {page_id} -> reachable but no title text found")
+    return title or None
+
+
 async def update_page_properties(
     token: str,
     version: str,
@@ -123,6 +143,47 @@ def _title_text(props: dict, key: str) -> str:
     return "".join(b.get("plain_text", "") for b in blocks) or "(Untitled)"
 
 
+def _any_title(props: dict) -> str:
+    """Return the text of whichever property is the DB's title, regardless of its name.
+
+    Used when resolving a mention to a page in another database, whose title column may
+    not be named the same as this database's."""
+    for value in props.values():
+        if isinstance(value, dict) and value.get("type") == "title":
+            return "".join(b.get("plain_text", "") for b in value.get("title", []))
+    return ""
+
+
+def _mention_page_id(block: dict) -> Optional[str]:
+    """Return the referenced page/database id if this title block is a page mention.
+
+    Notion sets a mention's ``plain_text`` to the mentioned page's title only when the
+    integration can read that page; otherwise it returns "Untitled". Keeping the id lets
+    the importer resolve the real title afterwards."""
+    if block.get("type") != "mention":
+        return None
+    mention = block.get("mention", {})
+    if mention.get("type") == "page":
+        return mention.get("page", {}).get("id")
+    if mention.get("type") == "database":
+        return mention.get("database", {}).get("id")
+    return None
+
+
+def _title_segments(props: dict, key: str) -> List[Dict[str, Any]]:
+    """Break a title into ordered segments. Each segment records its text, whether it is
+    an @mention, and (for page/database mentions) the referenced id — so unresolved
+    "Untitled" mention text can later be resolved to the real title or stripped out."""
+    segments: List[Dict[str, Any]] = []
+    for b in props.get(key, {}).get("title", []):
+        segments.append({
+            "text": b.get("plain_text", ""),
+            "is_mention": b.get("type") == "mention",
+            "page_id": _mention_page_id(b),
+        })
+    return segments
+
+
 def _select(props: dict, key: str) -> Optional[str]:
     sel = props.get(key, {}).get("select")
     return sel.get("name") if isinstance(sel, dict) else None
@@ -143,6 +204,7 @@ def parse_page(page: dict, prop_map: Dict[str, str]) -> Dict[str, Any]:
     return {
         "notion_id":   page["id"],
         "title":       _title_text(props, pm["title"]),
+        "title_segments": _title_segments(props, pm["title"]),
         "status":      _select(props, pm["status"]) or "",
         "description": _rich_text(props, pm["description"]),
         "parent_ids":  _relation_ids(props, pm["parent"]),

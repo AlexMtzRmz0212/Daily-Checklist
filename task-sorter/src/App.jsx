@@ -1,7 +1,7 @@
 // task-sorter/src/App.jsx
 
 import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
-import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
   useNodesState, useEdgesState, useReactFlow, Handle, Position,
@@ -149,7 +149,6 @@ function MainApp() {
   const [sortPhase, setSortPhase]   = useState("idle");
   const [showInterruptModal, setShowInterruptModal] = useState(false);
   const [preSortSnapshot, setPreSortSnapshot]       = useState([]);
-  const [exitingIds, setExitingIds] = useState(new Set());
 
   const [viewMode, setViewMode]         = useState("stats");
   const [sortColumn, setSortColumn]     = useState(null);
@@ -247,7 +246,6 @@ function MainApp() {
 
   const abortCtrl      = useRef(null);
   const revalAbortCtrl = useRef(null);
-  const prefersReduced = useReducedMotion();
 
   useEffect(() => {
     apiFetch("/config/model").then(data => {
@@ -393,7 +391,7 @@ function MainApp() {
     try {
       const res = await apiFetch("/notion/import", {
         method: "POST",
-        body: JSON.stringify({ score_new: true }),
+        body: JSON.stringify({ score_new: false }),
       });
       const fresh = await apiFetch("/tasks");
       setTasks(fresh);
@@ -597,11 +595,9 @@ function MainApp() {
   };
 
   const animateOut = useCallback((taskId, apiCall) => {
-    setExitingIds((s) => new Set([...s, taskId]));
     apiCall().catch(console.error);
     setTimeout(() => {
       setTasks((p) => p.filter((t) => t.Task_ID !== taskId));
-      setExitingIds((s) => { const n = new Set(s); n.delete(taskId); return n; });
     }, 600);
   }, []);
 
@@ -1247,7 +1243,7 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["table", "📊 Table"], ["subtasks", "✅ Subtasks"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
+                {[["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
                   const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : "text-cyan-400";
                   const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : "rgba(6,182,212,0.15)";
                   return (
@@ -1306,28 +1302,6 @@ function MainApp() {
           <TreeView refreshSignal={treeRefresh} onEdit={openEdit} />
         ) : viewMode === "matrix" ? (
           <MatrixView tasks={tasks} onPersist={handleMatrixPersist} />
-        ) : viewMode === "subtasks" ? (
-          <LayoutGroup>
-            <AnimatePresence mode="popLayout">
-              {sortedTasks.map((task, index) => (
-                <TaskCard
-                  key={task.Task_ID}
-                  task={task}
-                  rank={index + 1}
-                  isExiting={exitingIds.has(task.Task_ID)}
-                  getVal={getVal}
-                  onComplete={handleComplete}
-                  onDelete={handleDelete}
-                  onPostpone={openPostpone}
-                  onEdit={openEdit}
-                  onSubtaskAdded={handleSubtaskAdded}
-                  onSubtaskToggled={handleSubtaskToggled}
-                  onSubtaskDeleted={handleSubtaskDeleted}
-                  prefersReduced={prefersReduced}
-                />
-              ))}
-            </AnimatePresence>
-          </LayoutGroup>
         ) : viewMode === "stats" ? (
           <StatsView
             tasks={sortedTasks}
@@ -1356,7 +1330,7 @@ function MainApp() {
           />
         )}
 
-        {tasks.length === 0 && (viewMode === "subtasks" || viewMode === "stats" || viewMode === "table") && (
+        {tasks.length === 0 && (viewMode === "stats" || viewMode === "table") && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
             <p className="text-6xl mb-5">📋</p>
             <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
@@ -2161,12 +2135,13 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
   const subtasks   = task.Subtasks || [];
   const hasSubtasks = subtasks.length > 0;
   const doneCount  = subtasks.filter((s) => s.done).length;
-  // Only rows with subtasks are expandable — the Table tab no longer adds them.
-  const rowClickable = evalMode || hasSubtasks;
+  // Every row is clickable: in eval mode it selects, otherwise it expands the
+  // subtask panel (add / AI-suggest / toggle / delete) — even for empty tasks.
+  const rowClickable = true;
 
   return (
     <>
-      <tr className={`border-t border-white/5 transition-colors ${rowClickable ? "cursor-pointer" : ""} ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => { if (evalMode) toggleSelection(task.Task_ID); else if (hasSubtasks) onToggleExpand(); }}>
+      <tr className={`border-t border-white/5 transition-colors ${rowClickable ? "cursor-pointer" : ""} ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => { if (evalMode) toggleSelection(task.Task_ID); else onToggleExpand(); }}>
         {/* Rank / Checkbox */}
         <td className="px-4 py-3 text-center text-xs text-gray-600 select-none">
           {evalMode ? (
@@ -2182,7 +2157,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
           <div>
             <div className="font-bold text-sm flex items-center gap-2">
               {task.Name}
-              {hasSubtasks && (
+              {hasSubtasks ? (
                 <span className="inline-flex items-center gap-1 text-[9px] font-black tracking-wider px-1.5 py-0.5 rounded-md"
                   style={{ background: doneCount === subtasks.length ? "rgba(74,222,128,0.15)" : "rgba(34,211,238,0.12)",
                            color: doneCount === subtasks.length ? "#4ade80" : "#22d3ee",
@@ -2192,6 +2167,10 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
                     animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}
                     className="text-[8px]">▼</motion.span>
                 </span>
+              ) : (
+                <motion.span
+                  animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}
+                  className="text-[8px] text-gray-700" title="Add subtasks">▼</motion.span>
               )}
             </div>
             {task.Context && (
@@ -2233,119 +2212,22 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
         </td>
       </tr>
 
-      {/* Expanded subtask row — read-only view distributed across columns.
-          Adding subtasks lives in the ✅ Subtasks tab, not here. */}
-      {isExpanded && hasSubtasks && (
+      {/* Expanded subtask panel — full management (add / AI-suggest / toggle / delete)
+          via the shared SubtaskSection. Lives in its own <tr>, so its clicks don't
+          bubble to the row's expand/select handler. */}
+      {isExpanded && (
         <tr>
-          <td colSpan={10} className="px-4 py-4" style={{ background: "rgba(0,0,0,0.2)", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+          <td colSpan={10} className="px-4 py-3" style={{ background: "rgba(0,0,0,0.2)", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
             <div className="pl-8">
-              <div className="flex items-center gap-2 mb-3">
-                <p className="text-[10px] font-black tracking-widest text-gray-600 uppercase">Subtasks</p>
-                <div className="flex-1 max-w-[160px] h-1 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
-                  <div style={{ width: `${Math.round((doneCount / subtasks.length) * 100)}%`, height: "100%",
-                                background: doneCount === subtasks.length ? "#4ade80" : "#22d3ee", borderRadius: 9999 }} />
-                </div>
-                <span className="text-[10px] font-black tabular-nums" style={{ color: doneCount === subtasks.length ? "#4ade80" : "#64748b" }}>
-                  {doneCount}/{subtasks.length}
-                </span>
-              </div>
-              <div className="grid gap-x-6 gap-y-1.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
-                {subtasks.map(st => (
-                  <div key={st.id} className="flex items-center gap-2 text-sm group">
-                    <button onClick={(e) => { e.stopPropagation(); onSubtaskToggled(task.Task_ID, st.id, !st.done); }}
-                      className="w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-all"
-                      style={{ borderColor: st.done ? "#22d3ee" : "#334155", background: st.done ? "rgba(34,211,238,0.15)" : "transparent" }}>
-                      {st.done && <span className="text-[8px] text-cyan-400">✓</span>}
-                    </button>
-                    <span className={`flex-1 truncate ${st.done ? "line-through text-gray-600" : "text-gray-300"}`}>{st.name}</span>
-                    <button onClick={(e) => { e.stopPropagation(); onSubtaskDeleted(task.Task_ID, st.id); }}
-                      className="text-xs text-gray-800 group-hover:text-gray-600 hover:!text-red-400 transition-colors flex-shrink-0">✕</button>
-                  </div>
-                ))}
-              </div>
+              <SubtaskSection task={task}
+                onAdded={(st)      => onSubtaskAdded(task.Task_ID, st)}
+                onToggled={(id, d) => onSubtaskToggled(task.Task_ID, id, d)}
+                onDeleted={(id)    => onSubtaskDeleted(task.Task_ID, id)} />
             </div>
           </td>
         </tr>
       )}
     </>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  TaskCard
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TaskCard({ task, rank, isExiting, getVal, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, prefersReduced }) {
-  const spring = { type: "spring", stiffness: 380, damping: 38 };
-
-  const subtasks = task.Subtasks || [];
-  const doneCount = subtasks.filter((s) => s.done).length;
-  const donePct   = subtasks.length ? Math.round((doneCount / subtasks.length) * 100) : null;
-  const allDone   = subtasks.length > 0 && doneCount === subtasks.length;
-
-  return (
-    <motion.div layout={!prefersReduced} layoutId={task.Task_ID}
-      initial={{ opacity: 0, x: -20, scale: 0.98 }}
-      animate={isExiting ? { opacity: 0, x: 120, scale: 0.92 } : { opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 120, scale: 0.9 }}
-      transition={prefersReduced ? { duration: 0 } : { ...spring, layout: spring }}
-      className="mb-3 rounded-2xl overflow-hidden transition-colors"
-      style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.05)", borderLeft: `3px solid ${allDone ? "#4ade80" : "#22d3ee"}` }}>
-
-      {/* Header — no longer a toggle; subtasks are always visible below */}
-      <div className="flex items-center gap-3 px-4 py-3.5">
-        <span className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-xs font-black"
-          style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>{rank}</span>
-
-        <motion.button whileTap={{ scale: 0.7 }} onClick={() => onComplete(task.Task_ID)} title="Mark complete"
-          className="w-5 h-5 flex-shrink-0 rounded-full border-2 transition-colors"
-          style={{ borderColor: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4ade80")}
-          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#334155")} />
-
-        <div className="flex-1 min-w-0">
-          <p className="text-white text-sm font-bold leading-snug truncate">{task.Name}</p>
-          {task.Context && <p className="text-gray-600 text-xs mt-0.5 truncate">{task.Context}</p>}
-        </div>
-
-        {/* Progress ring-style badge */}
-        {donePct !== null ? (
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <div className="w-24 h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
-              <motion.div animate={{ width: `${donePct}%` }} transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                style={{ height: "100%", background: allDone ? "#4ade80" : "#22d3ee", borderRadius: 9999 }} />
-            </div>
-            <span className="text-[10px] font-black tabular-nums w-14 text-right"
-              style={{ color: allDone ? "#4ade80" : "#64748b" }}>{doneCount}/{subtasks.length}</span>
-          </div>
-        ) : (
-          <span className="text-[9px] font-black tracking-widest uppercase text-gray-700 flex-shrink-0">No subtasks yet</span>
-        )}
-
-        <button onClick={() => onEdit(task)} title="Edit name / context"
-          className="flex-shrink-0 text-sm transition-colors" style={{ color: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#22d3ee")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✎</button>
-
-        <button onClick={() => onPostpone(task)} title="Postpone until tomorrow"
-          className="flex-shrink-0 text-sm transition-colors ml-1" style={{ color: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#fb923c")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>⏰</button>
-
-        <button onClick={() => onDelete(task.Task_ID)} title="Delete"
-          className="flex-shrink-0 text-xs transition-colors ml-1" style={{ color: "#334155" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#334155")}>✕</button>
-      </div>
-
-      {/* Subtasks always visible — this is the whole point of the tab */}
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-        <SubtaskSection task={task}
-          onAdded={(st)      => onSubtaskAdded(task.Task_ID, st)}
-          onToggled={(id, d) => onSubtaskToggled(task.Task_ID, id, d)}
-          onDeleted={(id)    => onSubtaskDeleted(task.Task_ID, id)} />
-      </div>
-    </motion.div>
   );
 }
 

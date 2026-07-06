@@ -6,7 +6,6 @@ Project Description
 
 ### Todo
 
-- [ ] Notion Import button is currently using openrouter resources to do what? I am assuming to do the scores, but I just want it to import it, no scores needed  
 - [ ] Take advantage of vertical space on the tree tab, be flexible to arrange the branches of the tree in different directions, not just down wards. The main current problem is that it looks very small  
 - [ ] In general, tasks are not being well shown, it feels weird  
 - [ ] Subtasks should be shown in a different way, more concise  
@@ -15,13 +14,14 @@ Project Description
 - [ ] Since now it is linked to Notion, a way for the user to implement his own new page and integration it should be created  
 - [ ] Consider Effort as property  
 - [ ] Eisen Hower Matrix Graphic  
+- [ ] If the openrouter model is not available for any reason, there is no way for the user to know so  
 
 ### In Progress
 
-- [ ] If the openrouter model is not available for any reason, there is no way for the user to know so  
 
 ### Done ✓
 
+- [x] Notion Import button is currently using openrouter resources to do what? I am assuming to do the scores, but I just want it to import it, no scores needed  
 - [x] Tree tab has the potential to show in a very cool and different way the tree  
 - [x] Adding new task should be all the way hidden above everything with only one arrow showing to drag the workspace down and appear. Kinda like a bookmark.  
 - [x] Title of project should be smaller and panned to the top left and with a smaller subtitle saying "By BitToByte"  

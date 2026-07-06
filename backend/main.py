@@ -157,7 +157,7 @@ class NotionConfig(BaseModel):
     property_map: Optional[Dict[str, str]] = None        # override Notion column names
 
 class NotionImportRequest(BaseModel):
-    score_new: bool = True                               # AI-score newly imported tasks
+    score_new: bool = False                              # AI-score newly imported tasks (off by default; no OpenRouter usage)
 
 #endregion
 
@@ -691,6 +691,59 @@ def _prune_notion_subtasks(task: models.Task, present_notion_ids: set) -> None:
     if len(kept) != len(subs):
         task.Subtasks = kept
 
+# Titles Notion couldn't resolve arrive as one of these (Notion's "Untitled" for an
+# inaccessible page mention, or our own empty-title fallback).
+_UNRESOLVED_TITLES = {"", "untitled", "(untitled)"}
+
+
+def _is_unresolved_title(text: Optional[str]) -> bool:
+    return (text or "").strip().lower() in _UNRESOLVED_TITLES
+
+
+async def _resolve_mention_titles(parsed: List[Dict[str, Any]], cfg: Dict[str, Any]) -> None:
+    """Clean up @mention titles that Notion returned as "Untitled".
+
+    A Notion title that @mentions another page comes back with plain_text "Untitled"
+    unless the integration can read that page. We first try to recover the real title —
+    from the other pages fetched in this import (mentions within the same database resolve
+    for free), then a best-effort direct fetch of pages referenced from outside it.
+    Anything still unresolved has its "Untitled" placeholder stripped, so a mention the
+    integration can't read never surfaces as a task name."""
+    title_by_id = {pg["notion_id"]: pg["title"] for pg in parsed}
+
+    # Mentioned pages we couldn't resolve locally: best-effort direct fetch (needs access).
+    external_ids = {
+        seg["page_id"]
+        for pg in parsed
+        for seg in (pg.get("title_segments") or [])
+        if seg.get("is_mention") and seg.get("page_id")
+        and _is_unresolved_title(seg.get("text"))
+        and seg["page_id"] not in title_by_id
+    }
+    for pid in external_ids:
+        title = await notion.fetch_page_title(cfg["token"], cfg["version"], pid)
+        if title and not _is_unresolved_title(title):
+            title_by_id[pid] = title
+
+    for pg in parsed:
+        segments = pg.get("title_segments") or []
+        if not any(seg.get("is_mention") for seg in segments):
+            continue
+        parts = []
+        for seg in segments:
+            text = seg.get("text") or ""
+            if seg.get("is_mention"):
+                pid = seg.get("page_id")
+                resolved = title_by_id.get(pid) if pid else None
+                if resolved and not _is_unresolved_title(resolved):
+                    text = resolved            # recovered the mentioned page's real title
+                elif _is_unresolved_title(text):
+                    text = ""                  # unreadable mention: drop the "Untitled"
+            parts.append(text)
+        # Collapse whitespace left by dropped mentions; keep the placeholder if nothing remains.
+        pg["title"] = " ".join("".join(parts).split()) or "(Untitled)"
+
+
 @app.post("/notion/import")
 async def notion_import(request: NotionImportRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     cfg = get_notion_config(current_user)
@@ -705,6 +758,8 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         raise HTTPException(status_code=502, detail=f"Could not reach Notion: {exc}")
 
     parsed = [notion.parse_page(p, cfg["property_map"]) for p in pages]
+    # Replace "Untitled" @page-mention titles with the mentioned page's real title.
+    await _resolve_mention_titles(parsed, cfg)
     by_notion = {pg["notion_id"]: pg for pg in parsed}
 
     # Classify every page as category / task / subtask and detect Done/Forget roots.
