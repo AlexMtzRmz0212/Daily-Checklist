@@ -681,36 +681,40 @@ function MainApp() {
         backgroundSize: "40px 40px",
       }} />
 
-      {/* Top Right Controls */}
-      <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
+      {/* Top Right Controls — hang from the top edge as tabs, matching the add-tasks bookmark */}
+      <div className="fixed top-0 right-2 md:right-4 z-40 flex items-start gap-1 md:gap-2">
         {tasks.length > 1 && (
-          <div className="relative group flex items-center gap-1.5">
+          <div className="relative group flex items-start gap-1 md:gap-1.5">
             <motion.button
-              initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+              initial={{ opacity: 0, y: -44 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, type: "spring", damping: 24, stiffness: 260 }}
               onClick={handleSort} disabled={isSorting}
-              className="px-6 h-10 rounded-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
-              style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", boxShadow: "0 0 24px rgba(124,58,237,0.25)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
-              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-              {isSorting ? <span className="flex items-center gap-2"><Spinner /> SORTING…</span> : "⚡SORT/💾SAVE"}
+              title="Sort & save"
+              className="px-3 md:px-6 h-9 rounded-b-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", borderTop: "none", boxShadow: "0 6px 24px rgba(124,58,237,0.3)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
+              whileHover={{ scale: 1.05, y: 2 }} whileTap={{ scale: 0.95 }}>
+              {isSorting
+                ? <span className="flex items-center gap-2"><Spinner /><span className="hidden md:inline">SORTING…</span></span>
+                : <><span className="hidden md:inline">⚡SORT/💾SAVE</span><span className="md:hidden text-base">⚡💾</span></>}
             </motion.button>
             <SortInfo />
           </div>
         )}
         <motion.button
-          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          initial={{ opacity: 0, y: -44 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, type: "spring", damping: 24, stiffness: 260 }}
           onClick={() => setShowConfigModal(true)}
-          className="w-10 h-10 rounded-xl flex items-center justify-center"
-          style={{ background: "rgba(15,23,42,0.8)", border: "1px solid rgba(6,182,212,0.3)", backdropFilter: "blur(8px)" }}
-          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          title="Settings"
+          className="w-9 md:w-10 h-9 rounded-b-xl flex items-center justify-center"
+          style={{ background: "rgba(15,23,42,0.85)", border: "1px solid rgba(6,182,212,0.3)", borderTop: "none", backdropFilter: "blur(8px)" }}
+          whileHover={{ scale: 1.05, y: 2 }} whileTap={{ scale: 0.95 }}>
           <span className="text-lg">⚙️</span>
         </motion.button>
         <motion.button
-          initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+          initial={{ opacity: 0, y: -44 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, type: "spring", damping: 24, stiffness: 260 }}
           onClick={() => { localStorage.removeItem("token"); window.location.reload(); }}
           title="Log out"
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm opacity-80 hover:opacity-100 transition-opacity"
-          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", backdropFilter: "blur(8px)" }}
-          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          className="w-8 h-7 rounded-b-lg flex items-center justify-center text-sm opacity-80 hover:opacity-100 transition-opacity"
+          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", borderTop: "none", color: "#ef4444", backdropFilter: "blur(8px)" }}
+          whileHover={{ scale: 1.05, y: 2 }} whileTap={{ scale: 0.95 }}>
           ⎋
         </motion.button>
       </div>
@@ -1126,29 +1130,37 @@ function MainApp() {
       </AnimatePresence>
 
       {/* Main */}
-      <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 py-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
-        <header className="mb-4 text-center">
-          <h1 className="text-2xl font-black tracking-tight" style={{
+      <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 pt-3 pb-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
+        <header className="mb-4 text-left">
+          <h1 className="text-lg font-black tracking-tight leading-none" style={{
             background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 50%,#f472b6 100%)",
             WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
           }}>DAILY CHECKLIST SORTER</h1>
+          <a href="https://bittobyte.qzz.io" target="_blank" rel="noopener noreferrer"
+            className="inline-block text-[10px] font-semibold tracking-widest uppercase text-gray-500 hover:text-cyan-400 transition-colors mt-0.5">
+            By BitToByte
+          </a>
         </header>
 
-        {/* Add panel */}
-        <section ref={addPanelRef} className="mb-6 rounded-2xl" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <button onClick={() => setAddPanelOpen((o) => !o)}
-            className="w-full flex items-center justify-between px-5 py-3 text-left">
-            <span className="text-[11px] font-black tracking-widest uppercase text-cyan-400">＋ Add tasks</span>
-            <motion.span animate={{ rotate: addPanelOpen ? 90 : 0 }} transition={{ duration: 0.2 }}
-              className="text-gray-500 text-sm inline-block">▸</motion.span>
-          </button>
+        {/* Add-tasks bookmark — a tab hanging from the very top edge; pull it down to reveal */}
+        <AnimatePresence>
+          {addPanelOpen && (
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40"
+              style={{ background: "rgba(2,6,23,0.55)", backdropFilter: "blur(2px)" }} />
+          )}
+        </AnimatePresence>
+
+        <div ref={addPanelRef} className="fixed top-0 left-1/2 -translate-x-1/2 z-50 w-full max-w-xl px-3 flex flex-col items-center pointer-events-none">
           <AnimatePresence initial={false}>
           {addPanelOpen && (
           <motion.div
             initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25 }}
-            style={{ overflow: "hidden" }}>
-          <div className="px-5 pb-5">
+            style={{ overflow: "hidden" }}
+            className="w-full pointer-events-auto" >
+          <div className="px-5 pt-5 pb-5 rounded-b-2xl shadow-2xl" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.08)", borderTop: "none" }}>
           <div className="flex items-center gap-1 mb-4">
             {["single", "bulk"].map((mode) => (
               <button key={mode} onClick={() => setInputMode(mode)}
@@ -1213,7 +1225,19 @@ function MainApp() {
           </motion.div>
           )}
           </AnimatePresence>
-        </section>
+
+          {/* Bookmark handle — the only thing visible when closed; hangs from the top edge */}
+          <motion.button
+            onClick={() => setAddPanelOpen((o) => !o)}
+            whileHover={{ y: addPanelOpen ? 0 : 3 }}
+            title={addPanelOpen ? "Hide add tasks" : "Pull down to add tasks"}
+            className="pointer-events-auto flex items-center gap-1.5 px-3 md:px-4 py-1.5 rounded-b-xl shadow-lg"
+            style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.08)", borderTop: "none" }}>
+            <span className="text-[9px] font-black tracking-widest uppercase text-cyan-400/80"><span className="hidden sm:inline">＋ Add tasks</span><span className="sm:hidden">＋</span></span>
+            <motion.span animate={{ rotate: addPanelOpen ? 180 : 0 }} transition={{ duration: 0.2 }}
+              className="text-cyan-400 text-xs inline-block leading-none">▾</motion.span>
+          </motion.button>
+        </div>
 
         {/* Controls bar */}
         {tasks.length > 0 && (
@@ -1466,6 +1490,32 @@ function buildTree(tasks) {
   return { nodeMap, roots };
 }
 
+// Render the task tree as a plain-text outline (box-drawing chars) for copy/paste.
+function treeToText(nodeMap, roots) {
+  const lines = [];
+  const emit = (id, prefix, connector, childPrefix) => {
+    const t = nodeMap.get(id);
+    if (!t) return;
+    const icon = t.Node_Type === "category" ? "📁" : "📋";
+    lines.push(`${prefix}${connector}${icon} ${t.Name} [${t.Status}]`);
+    const subs = t.Subtasks || [];
+    const kids = t.children || [];
+    subs.forEach((s, i) => {
+      const last = i === subs.length - 1 && kids.length === 0;
+      lines.push(`${childPrefix}${last ? "└─ " : "├─ "}${s.done ? "☑" : "☐"} ${s.name}`);
+    });
+    kids.forEach((c, i) => {
+      const last = i === kids.length - 1;
+      emit(c, childPrefix, last ? "└─ " : "├─ ", childPrefix + (last ? "   " : "│  "));
+    });
+  };
+  roots.forEach((r, i) => {
+    if (i > 0) lines.push("");
+    emit(r, "", "", "");
+  });
+  return lines.join("\n");
+}
+
 function StatusPill({ status }) {
   const color =
     status === "Completed" ? "#34d399" :
@@ -1566,6 +1616,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const [error, setError]         = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [msg, setMsg]             = useState("");
+  const [treeMode, setTreeMode]   = useState("flow"); // flow | text
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -1635,6 +1686,29 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
     } catch (e) { setMsg(`⚠ Move failed: ${e.message}`); load(); }
   }, [load]);
 
+  // Copy the text outline; falls back to a hidden textarea + execCommand where the
+  // async Clipboard API is unavailable or blocked.
+  const copyTreeText = useCallback(() => {
+    const text = treeToText(nodeMap, roots);
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+      setMsg(ok ? "✓ Copied to clipboard." : "⚠ Copy failed — select the text and copy manually.");
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => setMsg("✓ Copied to clipboard.")).catch(fallback);
+    } else {
+      fallback();
+    }
+  }, [nodeMap, roots]);
+
   const onNodeDragStop = useCallback((_evt, node) => {
     const hits = getIntersectingNodes(node).filter((n) => n.id !== node.id);
     const target = hits[0];
@@ -1672,13 +1746,36 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
+        <div className="flex items-center gap-3">
+          <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
+          <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: "rgba(255,255,255,0.04)" }}>
+            {[["flow", "🌲 Flow"], ["text", "📄 Text"]].map(([mode, label]) => (
+              <button key={mode} onClick={() => setTreeMode(mode)}
+                className={`text-[10px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md transition-colors ${
+                  treeMode === mode ? "text-emerald-400" : "text-gray-600 hover:text-gray-400"
+                }`}
+                style={{ background: treeMode === mode ? "rgba(16,185,129,0.15)" : "transparent" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           {msg && <span className={`text-[10px] ${msg.startsWith("⚠") ? "text-amber-400" : "text-emerald-400"}`}>{msg}</span>}
+          {treeMode === "text" && (
+            <button onClick={copyTreeText} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">⧉ Copy</button>
+          )}
           <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
         </div>
       </div>
 
+      {treeMode === "text" ? (
+        <div className="rounded-xl overflow-auto" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+          <pre className="p-4 text-xs text-gray-300 font-mono leading-relaxed whitespace-pre select-text" style={{ userSelect: "text" }}>
+            {treeToText(nodeMap, roots)}
+          </pre>
+        </div>
+      ) : (
       <div className="rounded-xl overflow-hidden" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
         <ReactFlow
           nodes={nodes} edges={edges}
@@ -1695,9 +1792,12 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
             style={{ background: "#0f172a" }} maskColor="rgba(2,6,23,0.6)" />
         </ReactFlow>
       </div>
+      )}
 
       <p className="text-[10px] text-gray-700">
-        Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · ✎ to edit · scroll to zoom.
+        {treeMode === "text"
+          ? "Select the text (or hit ⧉ Copy) to paste the tree anywhere · ☑/☐ mark subtask completion."
+          : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · ✎ to edit · scroll to zoom."}
       </p>
     </motion.div>
   );

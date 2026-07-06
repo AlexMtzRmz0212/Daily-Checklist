@@ -6,9 +6,8 @@ Project Description
 
 ### Todo
 
+- [ ] Notion Import button is currently using openrouter resources to do what? I am assuming to do the scores, but I just want it to import it, no scores needed  
 - [ ] Take advantage of vertical space on the tree tab, be flexible to arrange the branches of the tree in different directions, not just down wards. The main current problem is that it looks very small  
-- [ ] Title of project should be smaller and panned to the top left and with a smaller subtitle saying "By BitToByte"  
-- [ ] Adding new task should be all the way hidden above everything with only one arrow showing to drag the workspace down and appear. Kinda like a bookmark.  
 - [ ] In general, tasks are not being well shown, it feels weird  
 - [ ] Subtasks should be shown in a different way, more concise  
 - [ ] "Tasks to focus" idea  
@@ -24,6 +23,8 @@ Project Description
 ### Done ✓
 
 - [x] Tree tab has the potential to show in a very cool and different way the tree  
+- [x] Adding new task should be all the way hidden above everything with only one arrow showing to drag the workspace down and appear. Kinda like a bookmark.  
+- [x] Title of project should be smaller and panned to the top left and with a smaller subtitle saying "By BitToByte"  
 - [x] Check sort button to explain what it does  
 - [x] Edition mode: for context, task  
 - [x] Matrix tab should only have actual tasks, not parents  
