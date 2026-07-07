@@ -2796,16 +2796,20 @@ function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onMo
       // Perform the reorder
       if (targetIndex !== dragIndex.current) {
         const fromIndex = dragIndex.current;
-        const newOrder = [...propertyOrder];
 
-        // Remove from original position
-        const [moved] = newOrder.splice(fromIndex, 1);
-        
+        // Reorder within the visible list (Time_Minutes is excluded from the
+        // rendered rows), so drop-zone indices must map to that same filtered
+        // list — not the full propertyOrder, where Time_Minutes may not be last.
+        const visible = propertyOrder.filter(k => k !== "Time_Minutes");
+        const [moved] = visible.splice(fromIndex, 1);
+
         // Adjust target if we removed before it
         const adjustedTarget = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
-        newOrder.splice(adjustedTarget, 0, moved);
-        
-        onReorder(newOrder);
+        visible.splice(adjustedTarget, 0, moved);
+
+        // Time_Minutes is always pinned to the bottom.
+        const rest = propertyOrder.filter(k => k === "Time_Minutes");
+        onReorder([...visible, ...rest]);
       }
 
       dragIndex.current = null;
