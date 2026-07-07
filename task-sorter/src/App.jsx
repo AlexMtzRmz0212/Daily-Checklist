@@ -458,6 +458,12 @@ function MainApp() {
   const [evalMode, setEvalMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState(new Set());
 
+  // Reset mode mirrors eval mode, but selection is per-column (in the table header)
+  // instead of per-task: checking a column resets its value for every task down to
+  // the floor — "No" for binary/scale (1) and 5 mins for Time.
+  const [resetMode, setResetMode] = useState(false);
+  const [selectedColumns, setSelectedColumns] = useState(new Set());
+
   const toggleEvalMode = () => {
     if (evalMode) {
       setEvalMode(false);
@@ -465,7 +471,48 @@ function MainApp() {
     } else {
       setEvalMode(true);
       setSelectedTasks(new Set());
+      setResetMode(false);
+      setSelectedColumns(new Set());
     }
+  };
+
+  const toggleResetMode = () => {
+    if (resetMode) {
+      setResetMode(false);
+      setSelectedColumns(new Set());
+    } else {
+      setResetMode(true);
+      setSelectedColumns(new Set());
+      setEvalMode(false);
+      setSelectedTasks(new Set());
+    }
+  };
+
+  const toggleColumnSelection = useCallback((key) => {
+    setSelectedColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleReset = () => {
+    if (selectedColumns.size > 0) {
+      setLocalEdits(prev => {
+        const next = { ...prev };
+        tasks.forEach(task => {
+          const edits = { ...(next[task.Task_ID] ?? {}) };
+          selectedColumns.forEach(key => {
+            edits[key] = key === "Time_Minutes" ? 5 : 1;
+          });
+          next[task.Task_ID] = edits;
+        });
+        return next;
+      });
+    }
+    setResetMode(false);
+    setSelectedColumns(new Set());
   };
 
   // Stream re-evaluation: read NDJSON events as each task is scored so the overlay can
@@ -1276,12 +1323,33 @@ function MainApp() {
                     {isRevaluating ? <span className="flex items-center gap-2"><Spinner /> EVALUATING…</span> : (selectedTasks.size > 0 ? `↺ EVALUATE (${selectedTasks.size})` : "↺ EVALUATE ALL")}
                   </motion.button>
                 </div>
+              ) : resetMode ? (
+                <div className="flex items-center gap-2">
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleResetMode}
+                    className="px-4 py-2.5 rounded-xl font-black text-sm tracking-wider uppercase text-gray-400 hover:text-white"
+                    style={{ background: "rgba(255,255,255,0.05)" }}>
+                    Cancel
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={handleReset}
+                    disabled={selectedColumns.size === 0}
+                    className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
+                    style={{ background: "rgba(251,146,60,0.15)", border: "1px solid rgba(251,146,60,0.35)", color: "#fb923c", fontFamily: "inherit" }}>
+                    ⟲ RESET ({selectedColumns.size})
+                  </motion.button>
+                </div>
               ) : (
-                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleEvalMode}
-                  className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase"
-                  style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
-                  ↺ EVALUATE
-                </motion.button>
+                <>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleResetMode}
+                    className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase"
+                    style={{ background: "rgba(251,146,60,0.15)", border: "1px solid rgba(251,146,60,0.35)", color: "#fb923c", fontFamily: "inherit" }}>
+                    ⟲ RESET
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }} onClick={toggleEvalMode}
+                    className="px-5 py-2.5 rounded-xl font-black text-sm tracking-[0.15em] uppercase"
+                    style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.35)", color: "#c084fc", fontFamily: "inherit" }}>
+                    ↺ EVALUATE
+                  </motion.button>
+                </>
               )}
             </div>}
           </div>
@@ -1328,6 +1396,9 @@ function MainApp() {
             evalMode={evalMode}
             selectedTasks={selectedTasks}
             toggleSelection={toggleTaskSelection}
+            resetMode={resetMode}
+            selectedColumns={selectedColumns}
+            toggleColumnSelection={toggleColumnSelection}
           />
         )}
 
@@ -2001,7 +2072,7 @@ function MatrixView({ tasks, onPersist }) {
 // ─────────────────────────────────────────────────────────────────────────────
 //region TaskTable
 
-function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection }) {
+function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, sortColumn, sortDirection, onSort, onComplete, onDelete, onPostpone, onEdit, onSubtaskAdded, onSubtaskToggled, onSubtaskDeleted, evalMode, selectedTasks, toggleSelection, resetMode, selectedColumns, toggleColumnSelection }) {
   const [expandedTask, setExpandedTask] = useState(null);
 
   const SortIcon = ({ column }) => {
@@ -2009,12 +2080,29 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
     return <span className="ml-1">{sortDirection === "asc" ? "↑" : "↓"}</span>;
   };
 
-  const TableHeader = ({ column, label }) => (
-    <th onClick={() => onSort(column)} className="sticky top-0 z-10 px-4 py-3 text-left text-[10px] font-black tracking-wider uppercase cursor-pointer hover:text-cyan-400 transition-colors"
-      style={{ color: sortColumn === column ? "#22d3ee" : "#64748b", background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-      {label} <SortIcon column={column} />
-    </th>
-  );
+  const TableHeader = ({ column, label, selectable = false }) => {
+    // In reset mode, selectable (property) columns show a checkbox on top of the
+    // label; ticking one queues that column to be reset to its floor value.
+    const showCheckbox = resetMode && selectable;
+    const checked = selectedColumns?.has(column);
+    return (
+      <th
+        onClick={() => { if (showCheckbox) toggleColumnSelection(column); else if (!resetMode) onSort(column); }}
+        className="sticky top-0 z-10 px-4 py-3 text-left text-[10px] font-black tracking-wider uppercase cursor-pointer hover:text-cyan-400 transition-colors"
+        style={{ color: showCheckbox && checked ? "#fb923c" : sortColumn === column ? "#22d3ee" : "#64748b", background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+        {showCheckbox ? (
+          <div className="flex flex-col items-start gap-1.5">
+            <div className={`w-4 h-4 inline-flex items-center justify-center rounded border text-[9px] ${checked ? "border-orange-500 bg-orange-500 text-white" : "border-gray-600 text-transparent"}`}>
+              ✓
+            </div>
+            <span>{label}</span>
+          </div>
+        ) : (
+          <>{label} <SortIcon column={column} /></>
+        )}
+      </th>
+    );
+  };
 
   return (
     <div className="rounded-2xl overflow-auto max-h-[70vh]" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -2037,7 +2125,7 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
                 "Priority": "Prio", 
                 "Hierarchy": "Hie",
               };
-              return <TableHeader key={key} column={key} label={shortLabels[key] || prop.label} />;
+              return <TableHeader key={key} column={key} label={shortLabels[key] || prop.label} selectable />;
             })}
             <th className="sticky top-0 z-10 px-4 py-3 w-24" style={{ background: "#0f172a", borderBottom: "1px solid rgba(255,255,255,0.08)" }}></th>
           </tr>
