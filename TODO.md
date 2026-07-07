@@ -6,6 +6,10 @@ Project Description
 
 ### Todo
 
+- [ ] Think of what to do with done tasks  
+- [ ] In the text tree tab, add toggle arrows to collapse and expand  
+- [ ] In the text tree tab, make it so that it freezes the parent of the last task being scrolled.  
+- [ ] Claude Code Integration  
 - [ ] Take advantage of vertical space on the tree tab, be flexible to arrange the branches of the tree in different directions, not just down wards. The main current problem is that it looks very small  
 - [ ] In general, tasks are not being well shown, it feels weird  
 - [ ] Subtasks should be shown in a different way, more concise  

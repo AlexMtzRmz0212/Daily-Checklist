@@ -71,9 +71,11 @@ DEFAULT_PROPERTY_MODES: Dict[str, str] = {
     "Relevance":   "binary",
     "Urgency":     "binary",
     "Importance":  "binary",
+    "Focus":       "binary",
 }
 
 DEFAULT_PROPERTY_ORDER: List[str] = [
+    "Focus",
     "Urgency",
     "Importance",
     "Relevance",
@@ -109,6 +111,7 @@ class TaskUpdate(BaseModel):
     Relevance: Optional[int] = Field(None, ge=1, le=10)
     Urgency: Optional[int] = Field(None, ge=1, le=10)
     Importance: Optional[int] = Field(None, ge=1, le=10)
+    Focus: Optional[int] = Field(None, ge=1, le=10)
     Status: Optional[str] = None
     Subtasks: Optional[List[Dict[str, Any]]] = None
     Parent_ID: Optional[str] = None
@@ -277,7 +280,7 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
     except json.JSONDecodeError:
         pass
     # Priority/Hierarchy are scale-only (1=highest); the rest may be binary yes/no.
-    BINARY_FIELDS = {"Difficulty", "Relevance", "Urgency", "Importance"}
+    BINARY_FIELDS = {"Difficulty", "Relevance", "Urgency", "Importance", "Focus"}
     SCALE_FIELDS  = {"Priority", "Hierarchy"}
     ALL_FIELDS    = BINARY_FIELDS | SCALE_FIELDS | {"Time_Minutes"}
     reconstructed: Dict[str, int] = {}
@@ -296,7 +299,7 @@ def _attempt_fix_truncated_json(text: str) -> Optional[str]:
         reconstructed.setdefault(field, 0)
     for field in SCALE_FIELDS:
         reconstructed.setdefault(field, 5)
-    reconstructed.setdefault("Time_Minutes", 30)
+    reconstructed.setdefault("Time_Minutes", 5)
     return json.dumps(reconstructed)
 
 async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 1000, temperature: float = 0.2, max_retries: int = 3) -> str:
@@ -345,7 +348,7 @@ async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 100
 
 def _build_score_prompt(name: str, context: str, property_modes: Dict[str, str]) -> str:
     score_fields = []
-    for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
+    for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance", "Focus"]:
         if property_modes.get(prop) == "binary":
             score_fields.append(f'  "{prop}": <0 or 1>  // 0=No, 1=Yes')
         else:
@@ -373,41 +376,72 @@ Scoring rubric:
 {'• Relevance:   0=not relevant to goals, 1=directly relevant' if property_modes.get('Relevance') == 'binary' else '• Relevance:   1=tangential, 10=core to primary goals'}
 {'• Urgency:     0=no time pressure, 1=urgent/time-sensitive' if property_modes.get('Urgency') == 'binary' else '• Urgency:     1=do whenever, 10=due within hours'}
 {'• Importance:  0=low importance, 1=high importance' if property_modes.get('Importance') == 'binary' else '• Importance:  1=nice-to-have, 10=critical long-term outcome'}
+{'• Focus:       0=background / can defer, 1=needs dedicated focus' if property_modes.get('Focus') == 'binary' else '• Focus:       1=background / can defer, 10=needs dedicated focus'}
 
 Return ONLY the JSON object. Start with {{ and end with }}. No trailing commas."""
+
+# Low-edge fallbacks: when scoring can't produce a value, assume NO on every binary
+# prop and the cheapest time estimate rather than silently promoting the task.
+_SCORE_DEFAULTS: Dict[str, Any] = {
+    "Priority": 5, "Hierarchy": 5, "Difficulty": 0,
+    "Relevance": 0, "Urgency": 0, "Importance": 0, "Focus": 0,
+    "Time_Minutes": 5,
+}
+
+
+def _clamp_score(v: Any, default: int = 5) -> int:
+    try:
+        return max(1, min(10, int(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_minutes(v: Any) -> int:
+    try:
+        minutes = int(v)
+        if minutes <= 0:
+            return 5
+        return min(TIME_PRESETS, key=lambda x: abs(x - minutes))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _map_metrics(metrics: Dict[str, Any], property_modes: Dict[str, str]) -> Dict[str, Any]:
+    """Coerce a raw/partial metrics dict into the final, storable score fields."""
+    result: Dict[str, Any] = {}
+    for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance", "Focus"]:
+        mode = property_modes.get(prop, "binary")
+        if mode == "binary":
+            try:
+                value = int(metrics.get(prop, 0))
+            except (TypeError, ValueError):
+                value = 0
+            result[prop] = 10 if value >= 1 else 1
+        else:
+            result[prop] = _clamp_score(metrics.get(prop))
+    result["Time_Minutes"] = _clamp_minutes(metrics.get("Time_Minutes"))
+    return result
+
+
+def _fallback_metrics(user: models.User) -> Dict[str, Any]:
+    """Neutral default scores, used when AI evaluation is unavailable so a task can
+    still be created (and re-evaluated later) instead of being dropped entirely."""
+    config = get_user_settings(user)
+    property_modes = config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
+    return _map_metrics(_SCORE_DEFAULTS.copy(), property_modes)
+
 
 async def _score_task(name: str, context: str, user: models.User) -> Dict[str, Any]:
     config = get_user_settings(user)
     property_modes = config.get("property_modes", DEFAULT_PROPERTY_MODES.copy())
 
-    _DEFAULTS: Dict[str, Any] = {
-        "Priority": 5, "Hierarchy": 5, "Difficulty": 10,
-        "Relevance": 10, "Urgency": 10, "Importance": 10,
-        "Time_Minutes": 60,
-    }
-
-    def clamp(v: Any, default: int = 5) -> int:
-        try:
-            return max(1, min(10, int(v)))
-        except (TypeError, ValueError):
-            return default
-
-    def clamp_minutes(v: Any) -> int:
-        try:
-            minutes = int(v)
-            if minutes <= 0:
-                return 30
-            return min(TIME_PRESETS, key=lambda x: abs(x - minutes))
-        except (TypeError, ValueError):
-            return 30
-
     # A real transport / credit / model failure (the HTTPException raised by
-    # _call_openrouter) must propagate so the caller can surface it — never fall
-    # through to defaults, which would masquerade as a successful evaluation.
+    # _call_openrouter) propagates to the caller, which decides whether to surface it
+    # or fall back to neutral defaults so the task is still created.
     raw = await _call_openrouter(_build_score_prompt(name, context, property_modes), user, max_tokens=300, temperature=0.15)
 
     # Parse problems, by contrast, are recoverable: try to repair, else use defaults.
-    metrics = _DEFAULTS.copy()
+    metrics = _SCORE_DEFAULTS.copy()
     cleaned = _clean_json_fence(raw)
     try:
         metrics = json.loads(cleaned)
@@ -417,26 +451,22 @@ async def _score_task(name: str, context: str, user: models.User) -> Dict[str, A
             try:
                 metrics = json.loads(fixed_json)
             except json.JSONDecodeError:
-                metrics = _DEFAULTS.copy()
+                metrics = _SCORE_DEFAULTS.copy()
         else:
-            metrics = _DEFAULTS.copy()
+            metrics = _SCORE_DEFAULTS.copy()
 
-    result = {}
-    for prop in ["Priority", "Hierarchy", "Difficulty", "Relevance", "Urgency", "Importance"]:
-        mode = property_modes.get(prop, "binary")
-        if mode == "binary":
-            value = metrics.get(prop, 0)
-            result[prop] = 10 if int(value) >= 1 else 1
-        else:
-            result[prop] = clamp(metrics.get(prop))
-
-    result["Time_Minutes"] = clamp_minutes(metrics.get("Time_Minutes"))
-    return result
+    return _map_metrics(metrics, property_modes)
 
 async def _score_tasks_bulk(tasks: List[Any], user: models.User) -> List[Dict[str, Any]]:
-    return await asyncio.gather(
-        *[_score_task(t.Name, t.Context, user) for t in tasks]
-    )
+    # Best-effort per task: a scoring failure falls back to neutral defaults so the
+    # rest of the batch (and the failed task itself) is still created.
+    async def _safe_score(t: Any) -> Dict[str, Any]:
+        try:
+            return await _score_task(t.Name, t.Context, user)
+        except HTTPException:
+            return _fallback_metrics(user)
+
+    return await asyncio.gather(*[_safe_score(t) for t in tasks])
 
 def _normalize_time_for_sorting(time_minutes: int) -> float:
     if time_minutes <= 0:
@@ -456,6 +486,7 @@ def _task_to_dict(task: models.Task) -> Dict:
         "Relevance": task.Relevance,
         "Urgency": task.Urgency,
         "Importance": task.Importance,
+        "Focus": task.Focus,
         "Postponed_Until": task.Postponed_Until,
         "Postpone_Reason": task.Postpone_Reason,
         "Subtasks": task.Subtasks or [],
@@ -925,7 +956,13 @@ async def get_tasks(db: Session = Depends(get_db), current_user: models.User = D
 
 @app.post("/tasks/evaluate")
 async def evaluate_task(task: TaskCreate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
-    metrics = await _score_task(task.Name, task.Context, current_user)
+    # Scoring is best-effort: if AI evaluation fails (no key, no credits, model error),
+    # still create the task with neutral defaults so it isn't lost — the user can
+    # re-evaluate it later.
+    try:
+        metrics = await _score_task(task.Name, task.Context, current_user)
+    except HTTPException:
+        metrics = _fallback_metrics(current_user)
     new_task = models.Task(
         Task_ID=str(uuid.uuid4()),
         user_id=current_user.id,

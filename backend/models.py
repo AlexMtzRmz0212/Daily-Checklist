@@ -28,6 +28,7 @@ class Task(Base):
     Relevance = Column(Integer, default=5)
     Urgency = Column(Integer, default=5)
     Importance = Column(Integer, default=5)
+    Focus = Column(Integer, default=1)  # binary: 1 = No (low edge), 10 = Yes
     Postponed_Until = Column(String, nullable=True)
     Postpone_Reason = Column(String, nullable=True)
     Subtasks = Column(JSON, default=list) # Store subtasks as JSON; each: {id, name, done, notion_id?}

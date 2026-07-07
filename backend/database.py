@@ -58,6 +58,7 @@ def ensure_columns() -> None:
         "Parent_ID": "VARCHAR",
         "Notion_Page_ID": "VARCHAR",
         "Node_Type": "VARCHAR",
+        "Focus": "INTEGER",
     }
     inspector = inspect(engine)
     if "tasks" not in inspector.get_table_names():
@@ -75,3 +76,6 @@ def ensure_columns() -> None:
         # (the added column is NULL for pre-existing rows).
         if "Node_Type" in missing:
             conn.execute(text('UPDATE tasks SET "Node_Type" = \'task\' WHERE "Node_Type" IS NULL'))
+        # Backfill Focus to the low edge (1 = No) for pre-existing rows.
+        if "Focus" in missing:
+            conn.execute(text('UPDATE tasks SET "Focus" = 1 WHERE "Focus" IS NULL'))

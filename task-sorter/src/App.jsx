@@ -53,6 +53,7 @@ const API = import.meta.env.DEV ? "http://localhost:8000" : "/api";
 
 const PROPERTIES = [
   { key: "Priority",      label: "PRIORITY",   hex: "#f87171", bar: "#ef4444" },
+  { key: "Focus",         label: "FOCUS",      hex: "#22d3ee", bar: "#06b6d4" },
   { key: "Urgency",       label: "URGENCY",    hex: "#fb923c", bar: "#f97316" },
   { key: "Importance",    label: "IMPORTANCE", hex: "#facc15", bar: "#eab308" },
   { key: "Relevance",     label: "RELEVANCE",  hex: "#34d399", bar: "#10b981" },
@@ -2027,13 +2028,14 @@ function TaskTable({ tasks, getVal, adjustProp, propertyModes, propertyOrder, so
               if (!prop) return null;
               // Shorten labels for table
               const shortLabels = {
+                "Focus": "Focu",
+                "Urgency": "Urge",
+                "Importance": "Impor",
+                "Relevance": "Relev", 
+                "Difficulty": "Diffi", 
+                "Time_Minutes": "Time",
                 "Priority": "Prio", 
-                "Urgency": "Urg", 
-                "Importance": "Imp",
-                "Relevance": "Rel", 
-                "Difficulty": "Diff", 
                 "Hierarchy": "Hie",
-                "Time_Minutes": "Time"
               };
               return <TableHeader key={key} column={key} label={shortLabels[key] || prop.label} />;
             })}
