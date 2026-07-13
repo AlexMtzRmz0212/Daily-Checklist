@@ -22,7 +22,7 @@ DEFAULT_VERSION = "2022-06-28"
 DEFAULT_PROP_MAP: Dict[str, str] = {
     "title":       "Goal",
     "parent":      "Parent item",
-    "status":      "1. Status",
+    "status":      "Status",
     "description": "Description",
     "hierarchy":   "Hierarchy",
     "priority":    "Priority",
@@ -185,8 +185,18 @@ def _title_segments(props: dict, key: str) -> List[Dict[str, Any]]:
 
 
 def _select(props: dict, key: str) -> Optional[str]:
-    sel = props.get(key, {}).get("select")
-    return sel.get("name") if isinstance(sel, dict) else None
+    """Read a single-choice value, tolerating both Notion property types.
+
+    A column named like "Status" is often Notion's dedicated *Status* property, whose
+    value lives under a ``"status"`` key — not ``"select"``. Reading only ``select``
+    silently returns ``None`` for those, so a status change in Notion never imports.
+    Handle either shape (and a bare ``rich_text``/``string`` fallback)."""
+    prop = props.get(key, {})
+    for kind in ("select", "status"):
+        val = prop.get(kind)
+        if isinstance(val, dict) and val.get("name"):
+            return val["name"]
+    return None
 
 
 def _number(props: dict, key: str) -> Optional[float]:

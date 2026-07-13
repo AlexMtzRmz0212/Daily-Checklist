@@ -687,7 +687,7 @@ def _clamp_1_10(value: Any) -> Optional[int]:
         return None
 
 def _notion_status_to_app(status: str) -> str:
-    """Fallback status mapping from the Notion '1. Status' select value."""
+    """Fallback status mapping from the Notion 'Status' select value."""
     s = status.strip().lower()
     if s in ("done", "complete", "completed"):
         return "Completed"
@@ -696,7 +696,7 @@ def _notion_status_to_app(status: str) -> str:
     return "Active"
 
 def _derive_status(archive: Optional[str], notion_status: str) -> str:
-    """Root-ancestor archive wins ('Done'/'Forget' roots); else fall back to '1. Status'."""
+    """Root-ancestor archive wins ('Done'/'Forget' roots); else fall back to 'Status'."""
     if archive == "done":
         return "Completed"
     if archive == "forget":

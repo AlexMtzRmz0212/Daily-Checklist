@@ -1718,6 +1718,50 @@ function treeToLines(nodeMap, roots, collapsed) {
   return lines;
 }
 
+// Text view: lay each root subtree out as its own column so the tree fills the wide
+// space on the right instead of stacking in one tall, left-hugging column. Columns
+// wrap to new rows when they run out of width. Purely a layout of the same nodes — the
+// ⧉ Copy button still emits one concatenated outline via treeToText, unchanged.
+function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
+  const renderLine = (ln) => {
+    if (ln.kind === "spacer") return null; // per-root render never emits spacers
+    if (ln.kind === "sub") {
+      return (
+        <div key={ln.key}>
+          <span>{ln.childPrefix}{ln.connector}</span>
+          <span className="inline-block w-4" />
+          <span>{ln.done ? "☑" : "☐"} {ln.name}</span>
+        </div>
+      );
+    }
+    return (
+      <div key={ln.key}>
+        <span>{ln.prefix}{ln.connector}</span>
+        {ln.hasChildren ? (
+          <button
+            onClick={() => toggle(ln.id)}
+            title={ln.isCollapsed ? "Expand" : "Collapse"}
+            className="inline-block w-4 text-center text-gray-400 hover:text-white">
+            {ln.isCollapsed ? "▸" : "▾"}
+          </button>
+        ) : (
+          <span className="inline-block w-4 text-center text-gray-700">◦</span>
+        )}
+        <span>{ln.icon} {ln.name} [{ln.status}]</span>
+      </div>
+    );
+  };
+  return (
+    <div className="p-4 flex flex-wrap items-start gap-x-12 gap-y-8 text-xs text-gray-300 font-mono leading-relaxed">
+      {roots.map((rootId) => (
+        <div key={rootId} className="whitespace-pre" style={{ userSelect: "text" }}>
+          {treeToLines(nodeMap, [rootId], collapsed).map(renderLine)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StatusPill({ status }) {
   const color =
     status === "Completed" ? "#34d399" :
@@ -2166,36 +2210,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
 
       {treeMode === "text" ? (
         <div className="rounded-xl overflow-auto" style={{ height: panelHeight, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-          <div className="p-4 text-xs text-gray-300 font-mono leading-relaxed whitespace-pre" style={{ userSelect: "text" }}>
-            {treeToLines(nodeMap, roots, collapsed).map((ln) => {
-              if (ln.kind === "spacer") return <div key={ln.key}>&nbsp;</div>;
-              if (ln.kind === "sub") {
-                return (
-                  <div key={ln.key}>
-                    <span>{ln.childPrefix}{ln.connector}</span>
-                    <span className="inline-block w-4" />
-                    <span>{ln.done ? "☑" : "☐"} {ln.name}</span>
-                  </div>
-                );
-              }
-              return (
-                <div key={ln.key}>
-                  <span>{ln.prefix}{ln.connector}</span>
-                  {ln.hasChildren ? (
-                    <button
-                      onClick={() => toggle(ln.id)}
-                      title={ln.isCollapsed ? "Expand" : "Collapse"}
-                      className="inline-block w-4 text-center text-gray-400 hover:text-white">
-                      {ln.isCollapsed ? "▸" : "▾"}
-                    </button>
-                  ) : (
-                    <span className="inline-block w-4 text-center text-gray-700">◦</span>
-                  )}
-                  <span>{ln.icon} {ln.name} [{ln.status}]</span>
-                </div>
-              );
-            })}
-          </div>
+          <TextTreeColumns nodeMap={nodeMap} roots={roots} collapsed={collapsed} toggle={toggle} />
         </div>
       ) : (
       <div className="rounded-xl overflow-hidden" style={{ height: panelHeight, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
