@@ -181,6 +181,7 @@ function MainApp() {
   const [notionError, setNotionError]         = useState("");
   const [notionMsg, setNotionMsg]             = useState("");
   const [treeRefresh, setTreeRefresh]         = useState(0);       // bump to re-fetch the tree
+  const [archiveRefresh, setArchiveRefresh]   = useState(0);       // bump to re-fetch the archive
 
   useEffect(() => {
     apiFetch("/config/notion").then(data => {
@@ -650,13 +651,35 @@ function MainApp() {
   }, []);
 
   const handleComplete = useCallback(
-    (id) => animateOut(id, () => apiFetch(`/tasks/${id}/complete`, { method: "PATCH" })),
+    (id) => {
+      animateOut(id, () => apiFetch(`/tasks/${id}/complete`, { method: "PATCH" }));
+      setArchiveRefresh((n) => n + 1); // surface the completed task in the Archive tab
+    },
     [animateOut]
   );
   const handleDelete = useCallback(
     (id) => animateOut(id, () => apiFetch(`/tasks/${id}`, { method: "DELETE" })),
     [animateOut]
   );
+
+  // Permanently remove an archived task locally (Notion-linked ones may return on re-import).
+  const handleArchiveDelete = useCallback((id) => {
+    apiFetch(`/tasks/${id}`, { method: "DELETE" })
+      .then(() => { setArchiveRefresh((n) => n + 1); setTreeRefresh((n) => n + 1); })
+      .catch(console.error);
+  }, []);
+
+  // Pull an archived task back into the active list.
+  const handleArchiveRestore = useCallback((id) => {
+    apiFetch(`/tasks/${id}/restore`, { method: "PATCH" })
+      .then(() => {
+        setArchiveRefresh((n) => n + 1);
+        setTreeRefresh((n) => n + 1);
+        return apiFetch("/tasks");
+      })
+      .then((fresh) => { if (fresh) setTasks(fresh); })
+      .catch(console.error);
+  }, []);
 
   const openPostpone = (task) => { setPostponeTarget(task); setPostponeReason(""); setPostponePhase("idle"); };
 
@@ -1283,17 +1306,16 @@ function MainApp() {
           </motion.button>
         </div>
 
-        {/* Controls bar */}
-        {tasks.length > 0 && (
-          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        {/* Controls bar — always shown so the Archive tab stays reachable with 0 active tasks */}
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
             <div className="flex items-center gap-3">
               <p className="text-[10px] text-gray-600 uppercase tracking-widest">
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"]].map(([mode, label]) => {
-                  const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : "text-cyan-400";
-                  const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : "rgba(6,182,212,0.15)";
+                {[["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"], ["archive", "🗄️ Archive"]].map(([mode, label]) => {
+                  const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : mode === "archive" ? "text-slate-300" : "text-cyan-400";
+                  const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : mode === "archive" ? "rgba(148,163,184,0.15)" : "rgba(6,182,212,0.15)";
                   return (
                   <button key={mode} onClick={() => setViewMode(mode)}
                     className={`px-3 py-1.5 rounded-md text-[10px] font-black tracking-wider uppercase transition-all ${
@@ -1353,7 +1375,6 @@ function MainApp() {
               )}
             </div>}
           </div>
-        )}
 
         {revalPhase === "error" && <p className="text-red-400 text-xs mb-3">⚠ Re-evaluate failed: {revalError}</p>}
         {sortError && <p className="text-red-400 text-xs mb-3">⚠ Sort failed: {sortError}</p>}
@@ -1366,6 +1387,12 @@ function MainApp() {
             aiPlanError={aiPlanError}
             onGenerate={handleAIPlan}
             hasTasks={tasks.length > 0}
+          />
+        ) : viewMode === "archive" ? (
+          <ArchiveView
+            refreshSignal={archiveRefresh}
+            onRestore={handleArchiveRestore}
+            onDelete={handleArchiveDelete}
           />
         ) : viewMode === "tree" ? (
           <TreeView refreshSignal={treeRefresh} onEdit={openEdit} />
@@ -1415,6 +1442,99 @@ function MainApp() {
 }
 
 //endregion
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ArchiveView — the one home for Done & Forgotten tasks
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ArchiveRow({ task, onRestore, onDelete }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl"
+      style={{ background: "#0f172a", border: "1px solid rgba(148,163,184,0.15)" }}>
+      <span className="text-sm flex-1 min-w-0 truncate text-gray-300">{task.Name}</span>
+      <StatusPill status={task.Status} />
+      {confirming ? (
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-red-400 font-black uppercase tracking-wider">Delete forever?</span>
+          <button onClick={() => { onDelete(task.Task_ID); setConfirming(false); }}
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: "rgba(248,113,113,0.15)", color: "#f87171" }} title="Confirm delete">✓</button>
+          <button onClick={() => setConfirming(false)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-white"
+            style={{ background: "rgba(255,255,255,0.05)" }} title="Cancel">✕</button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => onRestore(task.Task_ID)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: "rgba(34,211,238,0.12)", color: "#22d3ee" }} title="Restore to active">↩</button>
+          <button onClick={() => setConfirming(true)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: "rgba(248,113,113,0.12)", color: "#f87171" }} title="Delete permanently">✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArchiveView({ refreshSignal, onRestore, onDelete }) {
+  const [tasks, setTasks] = useState([]);
+  const [phase, setPhase] = useState("loading"); // loading | ready | error
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    setPhase("loading"); setError("");
+    apiFetch("/tasks/archived")
+      .then((data) => { setTasks(data); setPhase("ready"); })
+      .catch((e) => { setError(e.message); setPhase("error"); });
+  }, []);
+  useEffect(() => { load(); }, [load, refreshSignal]);
+
+  const done = tasks.filter((t) => t.Status === "Completed");
+  const forgotten = tasks.filter((t) => t.Status === "Forgotten");
+
+  if (phase === "loading") {
+    return <div className="flex items-center justify-center py-24 text-gray-500"><Spinner /> <span className="ml-3 text-xs uppercase tracking-widest">Loading archive…</span></div>;
+  }
+  if (phase === "error") {
+    return <p className="text-red-400 text-xs py-8">⚠ Could not load archive: {error}</p>;
+  }
+  if (tasks.length === 0) {
+    return (
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
+        <p className="text-6xl mb-5">🗄️</p>
+        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">Archive is empty</p>
+        <p className="text-gray-700 text-xs mt-2">Completed and forgotten tasks will collect here.</p>
+      </motion.div>
+    );
+  }
+
+  const renderSection = (label, items, color) => items.length === 0 ? null : (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-2">
+        <h3 className="text-[11px] font-black tracking-widest uppercase" style={{ color }}>{label}</h3>
+        <span className="text-[10px] text-gray-600">{items.length}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {items.map((t) => (
+          <ArchiveRow key={t.Task_ID} task={t} onRestore={onRestore} onDelete={onDelete} />
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="mb-4 px-3 py-2 rounded-lg text-[10px] text-gray-500"
+        style={{ background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.15)" }}>
+        ⚠ Deleting removes a task from here permanently. A task synced from Notion may reappear on your next Notion import.
+      </div>
+      {renderSection("✓ Done", done, "#34d399")}
+      {renderSection("✕ Forgotten", forgotten, "#94a3b8")}
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  AIPlanTab
@@ -1671,7 +1791,11 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const load = useCallback(() => {
     setPhase("loading"); setError("");
     apiFetch("/tasks/all")
-      .then((data) => { setTasks(data); setPhase("ready"); })
+      .then((data) => {
+        // Done/Forgotten tasks live only in the Archive tab — keep them out of the Tree.
+        setTasks(data.filter((t) => t.Status !== "Completed" && t.Status !== "Forgotten"));
+        setPhase("ready");
+      })
       .catch((e) => { setError(e.message); setPhase("error"); });
   }, []);
   useEffect(() => { load(); }, [load, refreshSignal]);

@@ -947,6 +947,17 @@ def get_all_tasks(db: Session = Depends(get_db), current_user: models.User = Dep
     tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
     return [_task_to_dict(t) for t in tasks]
 
+@app.get("/tasks/archived")
+def get_archived_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
+    """Completed + Forgotten real tasks — the Archive tab is where these live and nowhere
+    else. Mirrors the active list's Node_Type filter so structural/category rows stay out."""
+    tasks = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id,
+        models.Task.Status.in_(["Completed", "Forgotten"]),
+        models.Task.Node_Type == "task",
+    ).all()
+    return [_task_to_dict(t) for t in tasks]
+
 @app.get("/tasks")
 async def get_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> List[Dict]:
     tasks = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
@@ -1299,6 +1310,17 @@ def complete_task(task_id: str, db: Session = Depends(get_db), current_user: mod
     db.commit()
     return {"message": "Task completed", "Task_ID": task_id}
 
+@app.patch("/tasks/{task_id}/restore")
+def restore_task(task_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    """Pull a Completed/Forgotten task back out of the Archive and make it Active again."""
+    task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+
+    task.Status = "Active"
+    db.commit()
+    return {"message": "Task restored", "Task_ID": task_id}
+
 @app.patch("/tasks/{task_id}/postpone")
 def postpone_task(task_id: str, body: PostponeRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
     task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
@@ -1332,7 +1354,9 @@ def delete_task(task_id: str, db: Session = Depends(get_db), current_user: model
     task = db.query(models.Task).filter(models.Task.Task_ID == task_id, models.Task.user_id == current_user.id).first()
     if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
-    
+
+    # Local-only delete: we never archive/delete the linked Notion page, so a Notion-linked
+    # task can reappear on the next import. The Archive UI warns the user about this.
     db.delete(task)
     db.commit()
     return {"message": "Task deleted", "Task_ID": task_id}

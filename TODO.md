@@ -6,7 +6,7 @@ Project Description
 
 ### Todo
 
-- [ ] Think of what to do with done tasks  
+- [ ] Calendar View  
 - [ ] In the text tree tab, add toggle arrows to collapse and expand  
 - [ ] In the text tree tab, make it so that it freezes the parent of the last task being scrolled.  
 - [ ] Claude Code Integration  
@@ -25,6 +25,7 @@ Project Description
 
 ### Done ✓
 
+- [x] Think of what to do with done tasks  
 - [x] Notion Import button is currently using openrouter resources to do what? I am assuming to do the scores, but I just want it to import it, no scores needed  
 - [x] Tree tab has the potential to show in a very cool and different way the tree  
 - [x] Adding new task should be all the way hidden above everything with only one arrow showing to drag the workspace down and appear. Kinda like a bookmark.  
