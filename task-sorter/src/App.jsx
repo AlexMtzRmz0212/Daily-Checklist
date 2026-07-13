@@ -1682,6 +1682,41 @@ function treeToText(nodeMap, roots) {
   return lines.join("\n");
 }
 
+// Structured mirror of treeToText for the interactive Text view: returns line descriptors
+// (not a string) and honours `collapsed` — a collapsed node hides its subtasks + children.
+// Prefix/connector logic is identical to treeToText, so box-drawing guides stay aligned
+// regardless of what is folded.
+function treeToLines(nodeMap, roots, collapsed) {
+  const lines = [];
+  let key = 0;
+  const emit = (id, prefix, connector, childPrefix) => {
+    const t = nodeMap.get(id);
+    if (!t) return;
+    const icon = t.Node_Type === "category" ? "📁" : "📋";
+    const kids = t.children || [];
+    const subs = t.Subtasks || [];
+    const hasChildren = kids.length > 0;
+    const isCollapsed = collapsed.has(id);
+    lines.push({ kind: "node", key: key++, id, prefix, connector, hasChildren, isCollapsed,
+                 icon, name: t.Name, status: t.Status });
+    if (isCollapsed) return; // fold: skip subtasks and child nodes
+    subs.forEach((s, i) => {
+      const last = i === subs.length - 1 && kids.length === 0;
+      lines.push({ kind: "sub", key: key++, childPrefix, connector: last ? "└─ " : "├─ ",
+                   done: s.done, name: s.name });
+    });
+    kids.forEach((c, i) => {
+      const last = i === kids.length - 1;
+      emit(c, childPrefix, last ? "└─ " : "├─ ", childPrefix + (last ? "   " : "│  "));
+    });
+  };
+  roots.forEach((r, i) => {
+    if (i > 0) lines.push({ kind: "spacer", key: key++ });
+    emit(r, "", "", "");
+  });
+  return lines;
+}
+
 function StatusPill({ status }) {
   const color =
     status === "Completed" ? "#34d399" :
@@ -1808,6 +1843,14 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
     return n;
   }), []);
 
+  // Ids of every node that has children — the set to fold for "collapse all".
+  const collapsibleIds = useMemo(
+    () => [...nodeMap.values()].filter((t) => t.children.length > 0).map((t) => t.Task_ID),
+    [nodeMap],
+  );
+  const collapseAll = useCallback(() => setCollapsed(new Set(collapsibleIds)), [collapsibleIds]);
+  const expandAll   = useCallback(() => setCollapsed(new Set()), []);
+
   // Translate the task tree into React Flow nodes/edges for the current collapse state.
   const buildGraph = useCallback(() => {
     const pos = computeTreeLayout(nodeMap, roots, collapsed);
@@ -1932,6 +1975,12 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
         </div>
         <div className="flex items-center gap-3">
           {msg && <span className={`text-[10px] ${msg.startsWith("⚠") ? "text-amber-400" : "text-emerald-400"}`}>{msg}</span>}
+          {collapsibleIds.length > 0 && (
+            <>
+              <button onClick={expandAll} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">⊕ Expand all</button>
+              <button onClick={collapseAll} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">⊖ Collapse all</button>
+            </>
+          )}
           {treeMode === "text" && (
             <button onClick={copyTreeText} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">⧉ Copy</button>
           )}
@@ -1941,9 +1990,36 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
 
       {treeMode === "text" ? (
         <div className="rounded-xl overflow-auto" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-          <pre className="p-4 text-xs text-gray-300 font-mono leading-relaxed whitespace-pre select-text" style={{ userSelect: "text" }}>
-            {treeToText(nodeMap, roots)}
-          </pre>
+          <div className="p-4 text-xs text-gray-300 font-mono leading-relaxed whitespace-pre" style={{ userSelect: "text" }}>
+            {treeToLines(nodeMap, roots, collapsed).map((ln) => {
+              if (ln.kind === "spacer") return <div key={ln.key}>&nbsp;</div>;
+              if (ln.kind === "sub") {
+                return (
+                  <div key={ln.key}>
+                    <span>{ln.childPrefix}{ln.connector}</span>
+                    <span className="inline-block w-4" />
+                    <span>{ln.done ? "☑" : "☐"} {ln.name}</span>
+                  </div>
+                );
+              }
+              return (
+                <div key={ln.key}>
+                  <span>{ln.prefix}{ln.connector}</span>
+                  {ln.hasChildren ? (
+                    <button
+                      onClick={() => toggle(ln.id)}
+                      title={ln.isCollapsed ? "Expand" : "Collapse"}
+                      className="inline-block w-4 text-center text-gray-400 hover:text-white">
+                      {ln.isCollapsed ? "▸" : "▾"}
+                    </button>
+                  ) : (
+                    <span className="inline-block w-4 text-center text-gray-700">◦</span>
+                  )}
+                  <span>{ln.icon} {ln.name} [{ln.status}]</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : (
       <div className="rounded-xl overflow-hidden" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
@@ -1966,7 +2042,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
 
       <p className="text-[10px] text-gray-700">
         {treeMode === "text"
-          ? "Select the text (or hit ⧉ Copy) to paste the tree anywhere · ☑/☐ mark subtask completion."
+          ? "Click ▸/▾ to fold branches · Select the text (or hit ⧉ Copy) to paste the full tree · ☑/☐ mark subtask completion."
           : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · ✎ to edit · scroll to zoom."}
       </p>
     </motion.div>
