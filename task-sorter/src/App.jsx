@@ -4,9 +4,10 @@ import { useState, useEffect, useRef, useCallback, useMemo, createContext, useCo
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
-  useNodesState, useEdgesState, useReactFlow, Handle, Position,
+  useNodesState, useEdgesState, useReactFlow, useInternalNode, Handle, Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { hierarchy, tree } from "d3-hierarchy";
 import { fetchApi } from "./utils/api";
 
 // Self-contained BitToByte family cross-link footer (plain inline styles — no
@@ -1732,40 +1733,67 @@ function StatusPill({ status }) {
 }
 
 // A folded-in Notion leaf: rendered from the parent task's Subtasks JSON, not a row.
-// Custom React Flow node: a task/category card with a collapse toggle and edit button.
+// Status → dot color. Tree filters out Completed/Forgotten, so in practice this is
+// cyan (Active) vs amber (Postponed), but the full map keeps it correct everywhere.
+function statusColor(status) {
+  return status === "Completed" ? "#34d399"
+       : status === "Postponed" ? "#fbbf24"
+       : status === "Forgotten" ? "#94a3b8"
+       : "#22d3ee";
+}
+
+// Custom React Flow node: a slim task/category card. Just a collapse chevron, a small
+// status dot, and the (wrapping) name — editing is via double-click on the card, and
+// child/subtask counts moved off the card to keep names legible and cards uncluttered.
 function TaskFlowNode({ data }) {
-  const { task, collapsed, hasChildren, childCount, onToggle, onEdit } = data;
+  const { task, collapsed, hasChildren, onToggle, orientation, angle } = data;
   const isCategory = task.Node_Type === "category";
   const accent = isCategory ? "#f59e0b" : "#22d3ee";
-  const subCount = task.Subtasks?.length || 0;
+  const isLR = orientation === "lr";
+  const isRadial = orientation === "radial";
+  // Rectilinear layouts (LR, TB) use the classic disclosure convention (▸ collapsed →
+  // ▾ expanded); radial points the chevron along the node's own outward angle instead.
+  const outwardDeg = isRadial ? (angle ?? 0) * 180 / Math.PI - 90 : 0;
+  const rotateDeg = outwardDeg + (collapsed ? 0 : 90);
   return (
-    <div className="rounded-xl px-3 py-2 shadow-lg"
-      style={{ width: 190, background: "#0f172a", border: `1px solid ${accent}55`, borderLeft: `3px solid ${accent}` }}>
-      <Handle id="t" type="target" position={Position.Top} style={{ opacity: 0 }} />
-      <div className="flex items-center gap-1.5">
-        {hasChildren ? (
-          <button className="nodrag text-gray-400 hover:text-white text-xs w-4 text-center"
-            onClick={(e) => { e.stopPropagation(); onToggle(task.Task_ID); }}
-            title={collapsed ? "Expand" : "Collapse"}>{collapsed ? "▸" : "▾"}</button>
-        ) : <span className="text-gray-700 text-xs w-4 text-center">◦</span>}
-        <span className="text-sm flex-1 min-w-0 truncate"
-          style={{ color: isCategory ? "#fff" : "#e2e8f0", fontWeight: isCategory ? 700 : 500 }}>
-          {isCategory ? "📁" : "📋"} {task.Name}
-        </span>
-        <button className="nodrag text-[11px] text-gray-500 hover:text-cyan-300" title="Edit name / context"
-          onClick={(e) => { e.stopPropagation(); onEdit?.(task); }}>✎</button>
-      </div>
-      <div className="flex items-center gap-2 mt-1 flex-wrap">
-        <StatusPill status={task.Status} />
-        {childCount > 0 && <span className="text-[9px] text-gray-600">{childCount} child{childCount !== 1 ? "ren" : ""}</span>}
-        {subCount > 0 && <span className="text-[9px] text-gray-600">· {subCount} sub</span>}
-      </div>
-      <Handle id="s" type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+    <div className="rounded-xl px-2.5 shadow-lg flex items-center gap-1.5"
+      style={{ width: NODE_W, height: NODE_H, background: "#0f172a", border: `1px solid ${accent}55`, borderLeft: `3px solid ${accent}` }}>
+      <Handle id="t" type="target" position={isLR ? Position.Left : Position.Top} style={{ opacity: 0 }} />
+      {hasChildren ? (
+        <button className="nodrag text-gray-400 hover:text-white text-xs w-4 text-center flex-shrink-0"
+          onClick={(e) => { e.stopPropagation(); onToggle(task.Task_ID); }}
+          title={collapsed ? "Expand" : "Collapse"}>
+          <span className="inline-block transition-transform duration-200"
+            style={{ transform: `rotate(${rotateDeg}deg)` }}>▶</span>
+        </button>
+      ) : <span className="text-gray-700 text-xs w-4 text-center flex-shrink-0">◦</span>}
+      <span className="flex-shrink-0 rounded-full" title={task.Status}
+        style={{ width: 7, height: 7, background: statusColor(task.Status) }} />
+      <span className="text-sm leading-tight line-clamp-2 flex-1 min-w-0"
+        style={{ color: isCategory ? "#fff" : "#e2e8f0", fontWeight: isCategory ? 700 : 500 }}>
+        {isCategory ? "📁 " : ""}{task.Name}
+      </span>
+      <Handle id="s" type="source" position={isLR ? Position.Right : Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
 }
 
 const treeNodeTypes = { task: TaskFlowNode };
+
+// Radial mode needs edges that draw their own path (a fixed handle side doesn't make
+// sense when "outward" varies by angle). Reads LIVE node positions via useInternalNode
+// (rather than a frozen coordinate snapshot from layout time) so the edge tracks a
+// card while it's being dragged, instead of only "catching up" on drop.
+function RadialEdge({ id, source, target, style }) {
+  const s = useInternalNode(source), t = useInternalNode(target);
+  if (!s || !t) return null;
+  const sx = s.internals.positionAbsolute.x + (s.measured?.width ?? NODE_W) / 2;
+  const sy = s.internals.positionAbsolute.y + (s.measured?.height ?? NODE_H) / 2;
+  const tx = t.internals.positionAbsolute.x + (t.measured?.width ?? NODE_W) / 2;
+  const ty = t.internals.positionAbsolute.y + (t.measured?.height ?? NODE_H) / 2;
+  return <path id={id} className="react-flow__edge-path" d={`M ${sx},${sy} L ${tx},${ty}`} style={style} />;
+}
+const treeEdgeTypes = { radial: RadialEdge };
 
 // Full set of descendant ids for a node (used to forbid dropping a node onto its own subtree).
 function descendantsOf(nodeMap, id) {
@@ -1780,25 +1808,83 @@ function descendantsOf(nodeMap, id) {
   return out;
 }
 
-// Simple tidy top-down layout: leaves fill columns left→right; a parent centers over its
-// visible children. Collapsed nodes contribute no children.
-function computeTreeLayout(nodeMap, roots, collapsed) {
-  const X_GAP = 210, Y_GAP = 130;
+// Fixed card dimensions used by the layout math below — both are CSS-enforced on
+// TaskFlowNode (fixed width AND height), so the spacing math stays exact even though
+// the name now wraps to two lines.
+const NODE_W = 210, NODE_H = 58;
+
+// MiniMap coloring by depth — helps read the overall tree shape, especially radial.
+const DEPTH_COLORS = ["#f59e0b", "#22d3ee", "#a78bfa", "#34d399", "#f472b6", "#60a5fa"];
+
+// Wrap the forest under a synthetic super-root so d3.hierarchy can process multiple
+// top-level categories at once. Collapsed nodes report zero children to the layout
+// algorithm (but nodeMap still has their real children, so the chevron/toggle works).
+function buildVisibleHierarchy(nodeMap, roots, collapsed) {
+  const makeNode = (id) => ({
+    id,
+    children: collapsed.has(id) ? [] : (nodeMap.get(id)?.children || []).map(makeNode),
+  });
+  return hierarchy({ id: "__root__", children: roots.map(makeNode) });
+}
+
+// Horizontal (left→right) tidy-tree layout: depth flows left→right, siblings stack
+// vertically. Subtree size (via d3's Reingold–Tilford implementation) drives spacing,
+// so collapsing a large branch reclaims exactly the space it was using.
+const LR_DX = 108;  // sibling axis spacing → screen Y (58px card + breathing room)
+const LR_DY = 290;  // depth axis spacing → screen X (210px card + clearance)
+
+function computeTreeLayoutLR(nodeMap, roots, collapsed) {
+  const root = buildVisibleHierarchy(nodeMap, roots, collapsed);
+  tree().nodeSize([LR_DX, LR_DY])
+        .separation((a, b) => (a.parent === b.parent ? 1 : 2))(root);
   const pos = {};
-  let cursor = 0;
-  const kidsOf = (id) => (collapsed.has(id) ? [] : (nodeMap.get(id)?.children || []));
-  const place = (id, depth) => {
-    const kids = kidsOf(id);
-    if (!kids.length) {
-      pos[id] = { x: cursor * X_GAP, y: depth * Y_GAP };
-      cursor += 1;
-      return pos[id].x;
-    }
-    const xs = kids.map((c) => place(c, depth + 1));
-    pos[id] = { x: (xs[0] + xs[xs.length - 1]) / 2, y: depth * Y_GAP };
-    return pos[id].x;
-  };
-  roots.forEach((r) => place(r, 0));
+  for (const d of root.descendants()) {
+    if (d.data.id === "__root__") continue;
+    pos[d.data.id] = { x: d.y, y: d.x, depth: d.depth - 1 };
+  }
+  return pos;
+}
+
+// Top-to-bottom tidy-tree layout (the classic orientation): depth flows downward,
+// siblings spread horizontally. Same d3 engine as LR, just without the axis swap —
+// so it's still subtree-size-driven and reclaims space on collapse, unlike the old
+// fixed-gap layout this replaces.
+const TB_DX = 260; // sibling axis spacing → screen X (210px card + 50px gap)
+const TB_DY = 150; // depth axis spacing → screen Y (card height + edge clearance)
+
+function computeTreeLayoutTB(nodeMap, roots, collapsed) {
+  const root = buildVisibleHierarchy(nodeMap, roots, collapsed);
+  tree().nodeSize([TB_DX, TB_DY])
+        .separation((a, b) => (a.parent === b.parent ? 1 : 2))(root);
+  const pos = {};
+  for (const d of root.descendants()) {
+    if (d.data.id === "__root__") continue;
+    pos[d.data.id] = { x: d.x, y: d.y, depth: d.depth - 1 };
+  }
+  return pos;
+}
+
+// Radial layout: root at center, depth = radius, siblings distributed by angle.
+const RADIUS_STEP = 345;
+
+function computeTreeLayoutRadial(nodeMap, roots, collapsed) {
+  const root = buildVisibleHierarchy(nodeMap, roots, collapsed);
+  tree().size([2 * Math.PI, 1])
+        .separation((a, b) => (a.parent === b.parent ? 1 : 2) / (a.depth || 1))(root);
+  const pos = {};
+  for (const d of root.descendants()) {
+    if (d.data.id === "__root__") continue;
+    // Raw d3 depth (synthetic root = 0, real roots = 1, ...) — NOT the display-adjusted
+    // depth below — otherwise every root category would collapse onto radius 0.
+    const radius = d.depth * RADIUS_STEP;
+    const angle = d.x; // radians, 0..2π
+    const cx = radius * Math.sin(angle);
+    const cy = -radius * Math.cos(angle); // rotate so angle 0 = 12 o'clock
+    pos[d.data.id] = {
+      x: cx - NODE_W / 2, y: cy - NODE_H / 2, // center → top-left corner for React Flow
+      depth: d.depth - 1, angle,
+    };
+  }
   return pos;
 }
 
@@ -1818,6 +1904,8 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [msg, setMsg]             = useState("");
   const [treeMode, setTreeMode]   = useState("flow"); // flow | text
+  const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("treeLayoutMode") || "radial"); // lr | radial
+  useEffect(() => { localStorage.setItem("treeLayoutMode", layoutMode); }, [layoutMode]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -1853,27 +1941,38 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
 
   // Translate the task tree into React Flow nodes/edges for the current collapse state.
   const buildGraph = useCallback(() => {
-    const pos = computeTreeLayout(nodeMap, roots, collapsed);
+    const isLR = layoutMode === "lr";
+    const isRadial = layoutMode === "radial";
+    const pos = isLR ? computeTreeLayoutLR(nodeMap, roots, collapsed)
+              : isRadial ? computeTreeLayoutRadial(nodeMap, roots, collapsed)
+              : computeTreeLayoutTB(nodeMap, roots, collapsed);
     const rfNodes = Object.keys(pos).map((id) => {
       const t = nodeMap.get(id);
+      const { x, y, depth, angle } = pos[id];
       return {
-        id, type: "task", position: pos[id],
-        sourcePosition: Position.Bottom, targetPosition: Position.Top,
+        id, type: "task", position: { x, y },
+        sourcePosition: isLR ? Position.Right : Position.Bottom,
+        targetPosition: isLR ? Position.Left : Position.Top,
         data: { task: t, collapsed: collapsed.has(id), hasChildren: t.children.length > 0,
-                childCount: t.children.length, onToggle: toggle, onEdit },
+                childCount: t.children.length, onToggle: toggle, onEdit,
+                orientation: layoutMode, depth, angle },
       };
     });
     const rfEdges = [];
     for (const id of Object.keys(pos)) {
       if (collapsed.has(id)) continue;
       for (const c of (nodeMap.get(id)?.children || [])) {
-        if (pos[c]) rfEdges.push({ id: `${id}->${c}`, source: id, target: c,
-                                   sourceHandle: "s", targetHandle: "t", type: "smoothstep",
-                                   style: { stroke: "rgba(148,163,184,0.4)" } });
+        if (!pos[c]) continue;
+        rfEdges.push(isRadial
+          ? { id: `${id}->${c}`, source: id, target: c, type: "radial",
+              style: { stroke: "rgba(148,163,184,0.4)" } }
+          : { id: `${id}->${c}`, source: id, target: c,
+              sourceHandle: "s", targetHandle: "t", type: "smoothstep",
+              style: { stroke: "rgba(148,163,184,0.4)" } });
       }
     }
     return { rfNodes, rfEdges };
-  }, [nodeMap, roots, collapsed, toggle, onEdit]);
+  }, [nodeMap, roots, collapsed, toggle, onEdit, layoutMode]);
 
   useEffect(() => {
     const { rfNodes, rfEdges } = buildGraph();
@@ -1936,6 +2035,12 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
     reparent(node.id, target.id);
   }, [getIntersectingNodes, nodeMap, buildGraph, setNodes, reparent]);
 
+  // Editing moved off the card (no more ✎ button) — double-click a node to edit it.
+  const onNodeDoubleClick = useCallback((_evt, node) => {
+    const t = nodeMap.get(node.id);
+    if (t) onEdit?.(t);
+  }, [nodeMap, onEdit]);
+
   if (phase === "loading") {
     return <div className="text-center py-24 text-gray-500 text-sm flex items-center justify-center gap-3"><Spinner /> Loading tree…</div>;
   }
@@ -1959,10 +2064,10 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
           <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: "rgba(255,255,255,0.04)" }}>
-            {[["flow", "🌲 Flow"], ["text", "📄 Text"]].map(([mode, label]) => (
+            {[["text", "📄 Text"], ["flow", "🌲 Flow"]].map(([mode, label]) => (
               <button key={mode} onClick={() => setTreeMode(mode)}
                 className={`text-[10px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md transition-colors ${
                   treeMode === mode ? "text-emerald-400" : "text-gray-600 hover:text-gray-400"
@@ -1972,6 +2077,32 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
               </button>
             ))}
           </div>
+          {/* Layout picker branches off the Flow button — animates open (with a subtle
+              per-button stagger) only while Flow is active. */}
+          <AnimatePresence>
+            {treeMode === "flow" && (
+              <motion.div key="layout-picker" className="flex items-center gap-2"
+                variants={{
+                  hidden: { opacity: 0, x: -6, transition: { staggerChildren: 0.03, staggerDirection: -1 } },
+                  show:   { opacity: 1, x: 0,  transition: { staggerChildren: 0.05, delayChildren: 0.04 } },
+                }}
+                initial="hidden" animate="show" exit="hidden">
+                <span className="text-emerald-500/60 text-xs font-black select-none">›</span>
+                <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: "rgba(255,255,255,0.04)" }}>
+                  {[["radial", "◎ Radial"], ["lr", "→ L-R"], ["tb", "↓ T-B"]].map(([mode, label]) => (
+                    <motion.button key={mode} onClick={() => setLayoutMode(mode)}
+                      variants={{ hidden: { opacity: 0, scale: 0.8, x: -4 }, show: { opacity: 1, scale: 1, x: 0 } }}
+                      className={`text-[10px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md transition-colors ${
+                        layoutMode === mode ? "text-cyan-400" : "text-gray-600 hover:text-gray-400"
+                      }`}
+                      style={{ background: layoutMode === mode ? "rgba(34,211,238,0.15)" : "transparent" }}>
+                      {label}
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
         <div className="flex items-center gap-3">
           {msg && <span className={`text-[10px] ${msg.startsWith("⚠") ? "text-amber-400" : "text-emerald-400"}`}>{msg}</span>}
@@ -2027,14 +2158,17 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
           nodes={nodes} edges={edges}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
           onNodeDragStop={onNodeDragStop}
-          nodeTypes={treeNodeTypes}
+          onNodeDoubleClick={onNodeDoubleClick}
+          nodeTypes={treeNodeTypes} edgeTypes={treeEdgeTypes}
           nodesConnectable={false}
           fitView minZoom={0.15}
+          zoomOnDoubleClick={false}
+          onlyRenderVisibleElements
           proOptions={{ hideAttribution: false }}>
           <Background color="rgba(148,163,184,0.15)" gap={24} />
           <Controls showInteractive={false} />
           <MiniMap pannable zoomable
-            nodeColor={(n) => (n.data?.task?.Node_Type === "category" ? "#f59e0b" : "#22d3ee")}
+            nodeColor={(n) => DEPTH_COLORS[Math.min(n.data?.depth ?? 0, DEPTH_COLORS.length - 1)]}
             style={{ background: "#0f172a" }} maskColor="rgba(2,6,23,0.6)" />
         </ReactFlow>
       </div>
@@ -2043,7 +2177,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
       <p className="text-[10px] text-gray-700">
         {treeMode === "text"
           ? "Click ▸/▾ to fold branches · Select the text (or hit ⧉ Copy) to paste the full tree · ☑/☐ mark subtask completion."
-          : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · ✎ to edit · scroll to zoom."}
+          : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · double-click a card to edit · scroll to zoom."}
       </p>
     </motion.div>
   );

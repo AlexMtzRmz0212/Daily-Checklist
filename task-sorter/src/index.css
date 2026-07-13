@@ -1,3 +1,8 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Flow tree: glide to new positions on collapse/expand and layout-mode switch, but
+   don't fight the cursor while a node is actively being dragged. */
+.react-flow__node { transition: transform 0.35s ease; }
+.react-flow__node.dragging { transition: none; }

@@ -12,6 +12,7 @@
   "dependencies": {
     "@alex_mtz/bittobyte-ui": "^0.2.0",
     "@xyflow/react": "^12.11.1",
+    "d3-hierarchy": "^3.1.2",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.23.0",
     "react": "^19.2.4",
