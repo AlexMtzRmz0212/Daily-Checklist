@@ -1906,10 +1906,32 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const [treeMode, setTreeMode]   = useState("flow"); // flow | text
   const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("treeLayoutMode") || "radial"); // lr | radial
   useEffect(() => { localStorage.setItem("treeLayoutMode", layoutMode); }, [layoutMode]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pendingMove, setPendingMove] = useState(null); // { childId, parentId, childName, parentName }
+
+  // Esc exits fullscreen; lock body scroll while the overlay is up.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e) => { if (e.key === "Escape") setIsFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isFullscreen]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const { getIntersectingNodes } = useReactFlow();
+  const { getIntersectingNodes, fitView } = useReactFlow();
+
+  // Re-fit the flow after the panel resizes into/out of fullscreen (fitView only runs on mount).
+  useEffect(() => {
+    if (treeMode !== "flow") return;
+    const t = setTimeout(() => fitView({ padding: 0.1, duration: 300 }), 60);
+    return () => clearTimeout(t);
+  }, [isFullscreen, treeMode, fitView]);
 
   const load = useCallback(() => {
     setPhase("loading"); setError("");
@@ -2026,14 +2048,27 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
     const target = hits[0];
     const banned = descendantsOf(nodeMap, node.id);
     const currentParent = nodeMap.get(node.id)?.Parent_ID;
+    // Always snap back to the computed layout first — the move only lands after the user
+    // confirms it in the dialog below (or not at all, for invalid drops).
+    const { rfNodes } = buildGraph();
+    setNodes(rfNodes);
     if (!target || target.id === currentParent || banned.has(target.id)) {
-      const { rfNodes } = buildGraph();   // invalid/no-op drop → snap back to layout
-      setNodes(rfNodes);
       if (target && banned.has(target.id)) setMsg("⚠ Can't move a node under its own descendant.");
       return;
     }
-    reparent(node.id, target.id);
-  }, [getIntersectingNodes, nodeMap, buildGraph, setNodes, reparent]);
+    setPendingMove({
+      childId: node.id,
+      parentId: target.id,
+      childName: nodeMap.get(node.id)?.Name ?? "this task",
+      parentName: nodeMap.get(target.id)?.Name ?? "the target",
+    });
+  }, [getIntersectingNodes, nodeMap, buildGraph, setNodes]);
+
+  const confirmMove = useCallback(() => {
+    if (!pendingMove) return;
+    reparent(pendingMove.childId, pendingMove.parentId);
+    setPendingMove(null);
+  }, [pendingMove, reparent]);
 
   // Editing moved off the card (no more ✎ button) — double-click a node to edit it.
   const onNodeDoubleClick = useCallback((_evt, node) => {
@@ -2061,8 +2096,13 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const taskCount     = tasks.length - categoryCount;
   const subtaskCount  = tasks.reduce((n, t) => n + (t.Subtasks?.length || 0), 0);
 
+  // In fullscreen the panel fills the viewport minus the toolbar/hint chrome; otherwise 70vh.
+  const panelHeight = isFullscreen ? "calc(100vh - 120px)" : "70vh";
+
   return (
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+      className={isFullscreen ? "fixed inset-0 z-50 p-4 space-y-3 overflow-auto" : "space-y-3"}
+      style={isFullscreen ? { background: "#0a0a0f" } : undefined}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
@@ -2116,11 +2156,16 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
             <button onClick={copyTreeText} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">⧉ Copy</button>
           )}
           <button onClick={load} className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">↻ Refresh</button>
+          <button onClick={() => setIsFullscreen((f) => !f)}
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+            className="text-[10px] font-black tracking-widest text-emerald-400 hover:text-emerald-300 uppercase">
+            {isFullscreen ? "⤢ Exit" : "⛶ Fullscreen"}
+          </button>
         </div>
       </div>
 
       {treeMode === "text" ? (
-        <div className="rounded-xl overflow-auto" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+        <div className="rounded-xl overflow-auto" style={{ height: panelHeight, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
           <div className="p-4 text-xs text-gray-300 font-mono leading-relaxed whitespace-pre" style={{ userSelect: "text" }}>
             {treeToLines(nodeMap, roots, collapsed).map((ln) => {
               if (ln.kind === "spacer") return <div key={ln.key}>&nbsp;</div>;
@@ -2153,7 +2198,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
           </div>
         </div>
       ) : (
-      <div className="rounded-xl overflow-hidden" style={{ height: "70vh", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+      <div className="rounded-xl overflow-hidden" style={{ height: panelHeight, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
         <ReactFlow
           nodes={nodes} edges={edges}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
@@ -2179,6 +2224,36 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
           ? "Click ▸/▾ to fold branches · Select the text (or hit ⧉ Copy) to paste the full tree · ☑/☐ mark subtask completion."
           : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · double-click a card to edit · scroll to zoom."}
       </p>
+
+      {/* Re-parent confirmation — the drop is staged, not applied, until the user confirms. */}
+      <AnimatePresence>
+        {pendingMove && (
+          <motion.div key="reparent-bd" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] flex items-center justify-center"
+            style={{ background: "rgba(2,6,23,0.9)" }}
+            onClick={() => setPendingMove(null)}>
+            <motion.div initial={{ scale: 0.85, opacity: 0, y: 24 }} animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.85, opacity: 0, y: 24 }} transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              className="w-full max-w-sm mx-4 rounded-2xl p-8"
+              style={{ background: "#0f172a", border: "1px solid rgba(16,185,129,0.3)" }}
+              onClick={(e) => e.stopPropagation()}>
+              <p className="text-emerald-400 text-xs tracking-[0.3em] uppercase mb-1">⚠ Move task</p>
+              <h2 className="text-white text-lg font-black mb-4">Re-parent this task?</h2>
+              <p className="text-gray-400 text-sm leading-relaxed mb-2">
+                Move <span className="text-white font-bold">"{pendingMove.childName}"</span> under{" "}
+                <span className="text-white font-bold">"{pendingMove.parentName}"</span>?
+              </p>
+              <p className="text-gray-600 text-[10px] mb-6">
+                This changes the task's parent and, when the task is linked, writes the new hierarchy back to Notion.
+              </p>
+              <div className="flex flex-col gap-3">
+                <ModalBtn onClick={confirmMove} accent="cyan">✓ MOVE TASK</ModalBtn>
+                <ModalBtn onClick={() => setPendingMove(null)} accent="gray">CANCEL</ModalBtn>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
