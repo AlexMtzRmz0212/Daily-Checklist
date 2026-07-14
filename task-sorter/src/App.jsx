@@ -1776,6 +1776,39 @@ function StatusPill({ status }) {
   );
 }
 
+// A tiny origin marker shown next to a task/subtask name. Notion-synced items (those
+// carrying a Notion_Page_ID, or a subtask with a notion_id) get the Notion "N" glyph;
+// everything created locally in the app gets a subtle grey dot instead. `size` scales
+// it so it fits both the roomy table rows and the compact subtask/tree rows.
+function OriginBadge({ notion, size = 13, className = "", style = {} }) {
+  if (notion) {
+    return (
+      <span
+        title="Synced from Notion"
+        aria-label="Synced from Notion"
+        className={`inline-flex items-center justify-center flex-shrink-0 font-bold leading-none select-none ${className}`}
+        style={{
+          width: size, height: size, borderRadius: Math.max(2, size * 0.2),
+          background: "#fff", color: "#000",
+          fontSize: size * 0.72, fontFamily: "Georgia, 'Times New Roman', serif",
+          border: "1px solid rgba(0,0,0,0.25)", ...style,
+        }}>
+        N
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Created locally"
+      aria-label="Created locally"
+      className={`inline-flex items-center justify-center flex-shrink-0 select-none ${className}`}
+      style={{ width: size, height: size, ...style }}>
+      <span style={{ width: size * 0.4, height: size * 0.4, borderRadius: "50%",
+                     background: "#64748b", display: "block" }} />
+    </span>
+  );
+}
+
 // A folded-in Notion leaf: rendered from the parent task's Subtasks JSON, not a row.
 // Status → dot color. Tree filters out Completed/Forgotten, so in practice this is
 // cyan (Active) vs amber (Postponed), but the full map keeps it correct everywhere.
@@ -1813,6 +1846,7 @@ function TaskFlowNode({ data }) {
       ) : <span className="text-gray-700 text-xs w-4 text-center flex-shrink-0">◦</span>}
       <span className="flex-shrink-0 rounded-full" title={task.Status}
         style={{ width: 7, height: 7, background: statusColor(task.Status) }} />
+      <OriginBadge notion={!!task.Notion_Page_ID} size={12} />
       <span className="text-sm leading-tight line-clamp-2 flex-1 min-w-0"
         style={{ color: isCategory ? "#fff" : "#e2e8f0", fontWeight: isCategory ? 700 : 500 }}>
         {isCategory ? "📁 " : ""}{task.Name}
@@ -2670,6 +2704,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
         <td className="px-4 py-3">
           <div>
             <div className="font-bold text-sm flex items-center gap-2">
+              <OriginBadge notion={!!task.Notion_Page_ID} />
               {task.Name}
               {hasSubtasks ? (
                 <span className="inline-flex items-center gap-1 text-[9px] font-black tracking-wider px-1.5 py-0.5 rounded-md"
@@ -3034,6 +3069,7 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
                   style={{ borderColor: st.done ? "#22d3ee" : "#334155", background: st.done ? "rgba(34,211,238,0.15)" : "transparent" }}>
                   {st.done && <span className="text-[8px] text-cyan-400">✓</span>}
                 </button>
+                <OriginBadge notion={!!st.notion_id} size={11} />
                 <span className="flex-1 text-xs truncate transition-all"
                   style={{ color: st.done ? "#475569" : "#cbd5e1", textDecoration: st.done ? "line-through" : "none" }}>
                   {st.name}
