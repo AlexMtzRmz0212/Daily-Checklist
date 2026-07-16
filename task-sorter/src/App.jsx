@@ -184,6 +184,12 @@ function MainApp() {
   const [treeRefresh, setTreeRefresh]         = useState(0);       // bump to re-fetch the tree
   const [archiveRefresh, setArchiveRefresh]   = useState(0);       // bump to re-fetch the archive
 
+  // Danger zone: delete-tasks confirmation
+  const [deleteAllCounts, setDeleteAllCounts] = useState(null);    // null (closed) | {total,notion,local}
+  const [deleteAllPhase, setDeleteAllPhase]   = useState("idle");  // idle | counting | deleting
+  const [deleteAllError, setDeleteAllError]   = useState("");
+  const [deleteSel, setDeleteSel]             = useState({ notion: true, local: true }); // which origins to delete
+
   useEffect(() => {
     apiFetch("/config/notion").then(data => {
       setNotionConnected(data.connected);
@@ -402,6 +408,34 @@ function MainApp() {
       setNotionMsg(`Imported ${res.created} new, updated ${res.updated}.`);
       setNotionPhase("idle");
     } catch (e) { setNotionError(e.message); setNotionPhase("idle"); }
+  };
+
+  // Danger zone — close Settings, then open the confirm dialog after fetching the counts.
+  const handleOpenDeleteAll = async () => {
+    setDeleteAllError(""); setDeleteAllPhase("counting");
+    try {
+      const counts = await apiFetch("/tasks/count");
+      setShowConfigModal(false);                       // unpop the Settings modal first
+      setDeleteSel({ notion: counts.notion > 0, local: counts.local > 0 });
+      setDeleteAllCounts(counts);
+      setDeleteAllPhase("idle");
+    } catch (e) { setDeleteAllError(e.message); setDeleteAllPhase("idle"); }
+  };
+
+  const handleConfirmDeleteAll = async () => {
+    setDeleteAllError(""); setDeleteAllPhase("deleting");
+    try {
+      const qs = new URLSearchParams({ notion: String(deleteSel.notion), local: String(deleteSel.local) });
+      const res = await apiFetch(`/tasks?${qs}`, { method: "DELETE" });
+      const fresh = await apiFetch("/tasks");
+      setTasks(fresh);
+      setLocalEdits({});
+      setTreeRefresh((n) => n + 1);
+      setArchiveRefresh((n) => n + 1);
+      setDeleteAllCounts(null);
+      setDeleteAllPhase("idle");
+      setNotionMsg(`Deleted ${res.deleted} task(s) — ${res.notion} from Notion, ${res.local} local.`);
+    } catch (e) { setDeleteAllError(e.message); setDeleteAllPhase("idle"); }
   };
 
   const handleNotionExport = async () => {
@@ -968,6 +1002,23 @@ function MainApp() {
                 </p>
               </div>
 
+              {/* Danger Zone */}
+              <div className="mb-6 rounded-xl p-4" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.3)" }}>
+                <label className="flex items-center gap-2 text-[10px] font-black tracking-widest text-red-400 uppercase mb-2">
+                  ⚠ Danger Zone
+                </label>
+                <p className="text-[10px] text-gray-500 mb-3">
+                  Permanently delete your tasks — active, archived, categories and subtasks. You&apos;ll choose whether to remove Notion-synced tasks, local ones, or both. Notion pages are not touched, so synced tasks can return on your next import.
+                </p>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                  onClick={handleOpenDeleteAll} disabled={deleteAllPhase !== "idle"}
+                  className="w-full py-2 rounded-xl font-black text-xs tracking-widest disabled:opacity-40"
+                  style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.4)", color: "#f87171" }}>
+                  {deleteAllPhase === "counting" ? "…" : "🗑 DELETE TASKS…"}
+                </motion.button>
+                {deleteAllError && <p className="text-red-400 text-xs mt-2">⚠ {deleteAllError}</p>}
+              </div>
+
               {modelError && <p className="text-red-400 text-xs mb-4">⚠ {modelError}</p>}
 
               <div className="flex gap-3">
@@ -984,6 +1035,77 @@ function MainApp() {
                   CANCEL
                 </motion.button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete-all confirmation */}
+      <AnimatePresence>
+        {deleteAllCounts && (
+          <motion.div key="del-all" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            style={{ background: "rgba(2,6,23,0.8)", backdropFilter: "blur(6px)" }}
+            onClick={() => deleteAllPhase === "idle" && setDeleteAllCounts(null)}>
+            <motion.div initial={{ scale: 0.94, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-2xl p-6"
+              style={{ background: "#0f172a", border: "1px solid rgba(239,68,68,0.4)" }}>
+              {(() => {
+              const selectedTotal = (deleteSel.notion ? deleteAllCounts.notion : 0) + (deleteSel.local ? deleteAllCounts.local : 0);
+              const Square = ({ which, label, notionGlyph, count }) => {
+                const on = deleteSel[which];
+                const empty = count === 0;
+                return (
+                  <button type="button" disabled={empty}
+                    onClick={() => setDeleteSel((s) => ({ ...s, [which]: !s[which] }))}
+                    className="flex-1 rounded-xl p-3 text-center transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      background: on && !empty ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${on && !empty ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.08)"}`,
+                    }}>
+                    <div className="flex items-center justify-center gap-1.5 mb-1">
+                      <span className="text-xs" style={{ color: on && !empty ? "#f87171" : "#475569" }}>{on && !empty ? "☑" : "☐"}</span>
+                      <OriginBadge notion={notionGlyph} size={13} />
+                      <span className="text-[10px] font-black tracking-widest text-gray-500 uppercase">{label}</span>
+                    </div>
+                    <p className="text-2xl font-black" style={{ color: on && !empty ? "#fff" : "#64748b" }}>{count}</p>
+                  </button>
+                );
+              };
+              return (
+              <>
+              <h3 className="text-lg font-black text-red-400 tracking-wide mb-2">⚠ Delete tasks?</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Choose which tasks to permanently delete. This cannot be undone.
+              </p>
+              <div className="flex gap-3 mb-5">
+                <Square which="notion" label="Notion" notionGlyph={true}  count={deleteAllCounts.notion} />
+                <Square which="local"  label="Local"  notionGlyph={false} count={deleteAllCounts.local} />
+              </div>
+              <p className="text-[10px] text-gray-600 mb-4">
+                Notion pages aren&apos;t deleted — synced tasks can return on your next import.
+              </p>
+              {deleteAllError && <p className="text-red-400 text-xs mb-3">⚠ {deleteAllError}</p>}
+              <div className="flex gap-3">
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                  onClick={handleConfirmDeleteAll} disabled={deleteAllPhase !== "idle" || selectedTotal === 0}
+                  className="flex-1 py-3 rounded-xl font-black text-sm tracking-widest disabled:opacity-40"
+                  style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.45)", color: "#f87171" }}>
+                  {deleteAllPhase === "deleting"
+                    ? <span className="flex items-center justify-center gap-2"><Spinner /> DELETING…</span>
+                    : selectedTotal === 0 ? "SELECT TASKS TO DELETE" : `🗑 DELETE ${selectedTotal}`}
+                </motion.button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                  onClick={() => setDeleteAllCounts(null)} disabled={deleteAllPhase === "deleting"}
+                  className="px-6 py-3 rounded-xl font-black text-sm tracking-widest disabled:opacity-40"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8" }}>
+                  CANCEL
+                </motion.button>
+              </div>
+              </>
+              );
+              })()}
             </motion.div>
           </motion.div>
         )}
@@ -1314,7 +1436,7 @@ function MainApp() {
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
-                {[["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["stats", "📈 Stats"], ["ai-plan", "🤖 AI Plan"], ["archive", "🗄️ Archive"]].map(([mode, label]) => {
+                {[["stats", "📈 Stats"], ["table", "📊 Table"], ["tree", "🌲 Tree"], ["matrix", "🎯 Matrix"], ["ai-plan", "🤖 AI Plan"], ["archive", "🗄️ Archive"]].map(([mode, label]) => {
                   const accentText = mode === "ai-plan" ? "text-purple-400" : mode === "tree" ? "text-emerald-400" : mode === "matrix" ? "text-amber-400" : mode === "stats" ? "text-pink-400" : mode === "archive" ? "text-slate-300" : "text-cyan-400";
                   const accentBg = mode === "ai-plan" ? "rgba(139,92,246,0.15)" : mode === "tree" ? "rgba(16,185,129,0.15)" : mode === "matrix" ? "rgba(245,158,11,0.15)" : mode === "stats" ? "rgba(244,114,182,0.15)" : mode === "archive" ? "rgba(148,163,184,0.15)" : "rgba(6,182,212,0.15)";
                   return (
@@ -1699,12 +1821,12 @@ function treeToLines(nodeMap, roots, collapsed) {
     const hasChildren = kids.length > 0;
     const isCollapsed = collapsed.has(id);
     lines.push({ kind: "node", key: key++, id, prefix, connector, hasChildren, isCollapsed,
-                 icon, name: t.Name, status: t.Status });
+                 icon, name: t.Name, status: t.Status, notion: !!t.Notion_Page_ID });
     if (isCollapsed) return; // fold: skip subtasks and child nodes
     subs.forEach((s, i) => {
       const last = i === subs.length - 1 && kids.length === 0;
       lines.push({ kind: "sub", key: key++, childPrefix, connector: last ? "└─ " : "├─ ",
-                   done: s.done, name: s.name });
+                   done: s.done, name: s.name, notion: !!s.notion_id });
     });
     kids.forEach((c, i) => {
       const last = i === kids.length - 1;
@@ -1725,12 +1847,17 @@ function treeToLines(nodeMap, roots, collapsed) {
 function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
   const renderLine = (ln) => {
     if (ln.kind === "spacer") return null; // per-root render never emits spacers
+    // The Notion "N" marker is decorative and carries `select-none`, so neither the
+    // ⧉ Copy button (which emits treeToText) nor a manual text selection includes it.
+    const originMark = ln.notion
+      ? <OriginBadge notion size={11} className="mx-1 align-middle" />
+      : null;
     if (ln.kind === "sub") {
       return (
         <div key={ln.key}>
           <span>{ln.childPrefix}{ln.connector}</span>
           <span className="inline-block w-4" />
-          <span>{ln.done ? "☑" : "☐"} {ln.name}</span>
+          <span>{ln.done ? "☑" : "☐"} </span>{originMark}<span>{ln.name}</span>
         </div>
       );
     }
@@ -1747,7 +1874,7 @@ function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
         ) : (
           <span className="inline-block w-4 text-center text-gray-700">◦</span>
         )}
-        <span>{ln.icon} {ln.name} [{ln.status}]</span>
+        <span>{ln.icon} </span>{originMark}<span>{ln.name} [{ln.status}]</span>
       </div>
     );
   };
@@ -1981,7 +2108,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   const [error, setError]         = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [msg, setMsg]             = useState("");
-  const [treeMode, setTreeMode]   = useState("flow"); // flow | text
+  const [treeMode, setTreeMode]   = useState("text"); // text | flow
   const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("treeLayoutMode") || "radial"); // lr | radial
   useEffect(() => { localStorage.setItem("treeLayoutMode", layoutMode); }, [layoutMode]);
   const [isFullscreen, setIsFullscreen] = useState(false);

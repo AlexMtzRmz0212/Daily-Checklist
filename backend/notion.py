@@ -73,6 +73,50 @@ async def fetch_all_pages(token: str, version: str, database_id: str) -> List[di
     return results
 
 
+# Notion Status properties organize their options into named groups; these are the
+# group names (case-insensitive) whose member options we treat as "finished".
+COMPLETE_GROUP_NAMES: Set[str] = {"complete", "completed", "done", "finished"}
+
+
+async def fetch_status_complete_options(
+    token: str,
+    version: str,
+    database_id: str,
+    status_prop: str,
+    complete_group_names: Optional[Iterable[str]] = None,
+) -> Set[str]:
+    """Return the lowercased Status option names that live in a "Complete"-like group.
+
+    A Notion *Status* property groups its options (e.g. To-do / In progress / Complete),
+    but a page query only returns the chosen option's *name* — not its group. So we read
+    the database schema once and map each option to its group, returning the names of the
+    options in any completion group. Callers use this to treat a whole "Complete" group as
+    done, instead of only the literal word "Done".
+
+    Returns an empty set when the property isn't a grouped Status type (e.g. a plain
+    Select) or the schema can't be read, so the caller falls back to word matching."""
+    wanted = {g.strip().lower() for g in (complete_group_names or COMPLETE_GROUP_NAMES)}
+    try:
+        db = await _request("GET", f"/databases/{database_id}", token, version)
+    except httpx.HTTPError as exc:
+        print(f"[notion] schema fetch for status groups failed: {exc}")
+        return set()
+    status_def = db.get("properties", {}).get(status_prop, {}).get("status")
+    if not isinstance(status_def, dict):
+        return set()  # not a grouped Status property (plain select, missing, etc.)
+    id_to_name = {
+        o.get("id"): (o.get("name") or "") for o in status_def.get("options", [])
+    }
+    complete: Set[str] = set()
+    for group in status_def.get("groups", []):
+        if (group.get("name") or "").strip().lower() in wanted:
+            for oid in group.get("option_ids", []):
+                name = id_to_name.get(oid, "").strip().lower()
+                if name:
+                    complete.add(name)
+    return complete
+
+
 async def fetch_page_title(token: str, version: str, page_id: str) -> Optional[str]:
     """Best-effort read of a single page's title, used to resolve an @mention that
     points at a page *outside* the imported database. Returns ``None`` if the page is

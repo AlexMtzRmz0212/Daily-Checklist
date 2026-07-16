@@ -214,6 +214,8 @@ def get_notion_config(user: models.User) -> Dict[str, Any]:
         # Titles of the special archive root parents (case-insensitive match).
         "done_titles": raw.get("done_titles") or ["done"],
         "forget_titles": raw.get("forget_titles") or ["forget", "forgotten"],
+        # Names of the Notion Status *groups* whose options count as finished.
+        "complete_group_titles": raw.get("complete_group_titles") or list(notion.COMPLETE_GROUP_NAMES),
         "connected": bool(token and raw.get("database_id")),
     }
 
@@ -686,22 +688,39 @@ def _clamp_1_10(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
-def _notion_status_to_app(status: str) -> str:
-    """Fallback status mapping from the Notion 'Status' select value."""
+# Literal Status values always recognized, regardless of the Notion group layout.
+_DONE_STATUS_WORDS = frozenset({"done", "complete", "completed"})
+_FORGET_STATUS_WORDS = frozenset({"forget", "forgotten", "ignore", "drop"})
+# Status values that sit in a "Complete" group but are structural, not finished: mapping
+# them to Completed would archive branch nodes and hide their children. Kept Active.
+_STATUS_DONE_EXCLUDE = frozenset({"parent"})
+
+def _notion_status_to_app(status: str, complete_names: frozenset = frozenset()) -> str:
+    """Map a Notion 'Status' value to the app's status.
+
+    A value counts as finished if it is a recognized completion word *or* it belongs to
+    the Status property's 'Complete' group (``complete_names``, resolved from the DB
+    schema). 'Forget' family wins first, and structural markers (``_STATUS_DONE_EXCLUDE``,
+    e.g. 'parent') are never treated as done so branch nodes aren't archived out of view.
+    """
     s = status.strip().lower()
-    if s in ("done", "complete", "completed"):
-        return "Completed"
-    if s in ("forget", "forgotten", "ignore", "drop"):
+    if not s:
+        return "Active"
+    if s in _FORGET_STATUS_WORDS:
         return "Forgotten"
+    if s in _STATUS_DONE_EXCLUDE:
+        return "Active"
+    if s in _DONE_STATUS_WORDS or s in complete_names:
+        return "Completed"
     return "Active"
 
-def _derive_status(archive: Optional[str], notion_status: str) -> str:
+def _derive_status(archive: Optional[str], notion_status: str, complete_names: frozenset = frozenset()) -> str:
     """Root-ancestor archive wins ('Done'/'Forget' roots); else fall back to 'Status'."""
     if archive == "done":
         return "Completed"
     if archive == "forget":
         return "Forgotten"
-    return _notion_status_to_app(notion_status)
+    return _notion_status_to_app(notion_status, complete_names)
 
 def _upsert_subtask(parent_task: models.Task, notion_id: str, name: str, done: bool) -> None:
     """Fold a Notion leaf into the parent task's Subtasks, matching by notion_id."""
@@ -788,6 +807,13 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach Notion: {exc}")
 
+    # Resolve which Status options belong to a "Complete" group, so a whole group
+    # (e.g. "Explored", "Done") imports as finished — not just the literal word "Done".
+    complete_names = frozenset(await notion.fetch_status_complete_options(
+        cfg["token"], cfg["version"], cfg["database_id"],
+        cfg["property_map"]["status"], cfg["complete_group_titles"],
+    ))
+
     parsed = [notion.parse_page(p, cfg["property_map"]) for p in pages]
     # Replace "Untitled" @page-mention titles with the mentioned page's real title.
     await _resolve_mention_titles(parsed, cfg)
@@ -813,7 +839,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         if role == "subtask":
             continue
         node_type = "category" if role == "category" else "task"
-        status = _derive_status(classes[nid]["archive"], pg["status"])
+        status = _derive_status(classes[nid]["archive"], pg["status"], complete_names)
         h = _clamp_1_10(pg["hierarchy"])
         p = _clamp_1_10(pg["priority"])
         task = existing_by_notion.get(nid)
@@ -863,7 +889,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         )
         if parent_task is None:
             continue  # defensive: a subtask always has a non-leaf parent
-        done = _derive_status(classes[nid]["archive"], pg["status"]) != "Active"
+        done = _derive_status(classes[nid]["archive"], pg["status"], complete_names) != "Active"
         _upsert_subtask(parent_task, nid, pg["title"], done)
 
     # Prune Notion-sourced subtasks that vanished from Notion (keep local-only ones).
@@ -1360,6 +1386,43 @@ def delete_task(task_id: str, db: Session = Depends(get_db), current_user: model
     db.delete(task)
     db.commit()
     return {"message": "Task deleted", "Task_ID": task_id}
+
+def _origin_counts(rows: List[models.Task]) -> Dict[str, int]:
+    """Split a task list into Notion-synced (has a Notion_Page_ID) vs locally-created."""
+    notion = sum(1 for t in rows if t.Notion_Page_ID)
+    return {"total": len(rows), "notion": notion, "local": len(rows) - notion}
+
+@app.get("/tasks/count")
+def count_tasks(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    """Counts across *all* of the user's tasks (every status), split by origin. Backs the
+    delete-all confirmation so it can state how many Notion vs local tasks will be removed."""
+    rows = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+    return _origin_counts(rows)
+
+@app.delete("/tasks")
+def delete_all_tasks(
+    notion: bool = True,
+    local: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+) -> Dict:
+    """Delete the current user's tasks, scoped by origin via the `notion`/`local` flags.
+
+    `notion=true` removes Notion-synced tasks (those with a Notion_Page_ID); `local=true`
+    removes locally-created ones. Both default true (delete everything); pass one as false
+    to keep that group. Deletes are local-only — linked Notion pages are untouched, so
+    Notion-synced tasks can return on the next import."""
+    rows = db.query(models.Task).filter(models.Task.user_id == current_user.id).all()
+    victims = [
+        t for t in rows
+        if (notion and t.Notion_Page_ID) or (local and not t.Notion_Page_ID)
+    ]
+    counts = _origin_counts(victims)
+    for t in victims:
+        db.delete(t)
+    db.commit()
+    return {"message": f"Deleted {counts['total']} task(s)", "deleted": counts["total"],
+            "notion": counts["notion"], "local": counts["local"]}
 
 #endregion
 
