@@ -7,10 +7,10 @@ A full-stack task management app where an AI evaluates, scores, and physically r
 
 ## Quick Start
 
-### 1 — Get an OpenRouter API key
+### 1. Get an OpenRouter API key
 Sign up at https://openrouter.ai and copy your key.
 
-### 2 — Clone & Setup
+### 2. Clone & Setup
 
 ```bash
 git clone https://github.com/AlexMtzRmz0212/Daily-Checklist.git
@@ -23,7 +23,7 @@ copy .env.example .env  # Windows
 
 Edit `.env` with your API key and preferred model.
 
-### 3 — Backend
+### 3. Backend
 
 ```bash
 # Create virtual environment
@@ -36,7 +36,7 @@ pip install fastapi "uvicorn[standard]" httpx pydantic
 uvicorn backend.main:app --reload --port 8000
 ```
 
-### 4 — Frontend (new terminal)
+### 4. Frontend (new terminal)
 
 ```bash
 cd task-sorter
@@ -47,7 +47,7 @@ npm run dev
 
 Open http://localhost:5173
 
-### 5 — One-Click Launch (after setup)
+### 5. One-Click Launch (after setup)
 
 Double-click `Sorter.bat` to start both servers and open Chrome automatically.
 
@@ -148,13 +148,13 @@ Daily-Checklist/
 
 ## Troubleshooting
 
-**CORS errors** — Backend must run on port 8000
+**CORS errors:** Backend must run on port 8000
 
-**API key not found** — Copy `.env.example` to `.env` and add your key
+**API key not found:** Copy `.env.example` to `.env` and add your key
 
-**Sorter.bat fails** — Run manual setup once first
+**Sorter.bat fails:** Run manual setup once first
 
-**Chrome doesn't open** — Edit last line of `Sorter.bat` to use Firefox or default browser
+**Chrome doesn't open:** Edit last line of `Sorter.bat` to use Firefox or default browser
 
 ---
 
@@ -167,6 +167,6 @@ MIT
 
 ## Contact
 
-Questions, comments, or suggestions? Send an email to [alejandro.martinez.rmz97@gmail.com](mailto:alejandro.martinez.rmz97@gmail.com) with the subject line: **AI Task Sorter — [Your Topic]**
+Questions, comments, or suggestions? Send an email to [alejandro.martinez.rmz97@gmail.com](mailto:alejandro.martinez.rmz97@gmail.com) with the subject line: **AI Task Sorter: [Your Topic]**
 
 We'd love to hear your feedback!

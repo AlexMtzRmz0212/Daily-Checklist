@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Privacy Policy · AI Task Sorter</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #030712;
+    color: #e2e8f0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+  a { color: #67e8f9; }
+  a:hover { color: #a5f3fc; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; color: #22d3ee; }
+  h2 { font-size: 1.25rem; margin: 2.5rem 0 .75rem; color: #f8fafc; }
+  h3 { font-size: 1rem; margin: 1.5rem 0 .5rem; color: #cbd5e1; }
+  .updated { color: #cbd5e1; font-size: .875rem; margin: 0 0 2rem; }
+  ul { padding-left: 1.25rem; }
+  li { margin-bottom: .5rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9375rem; }
+  th, td { text-align: left; padding: .625rem .75rem; border-bottom: 1px solid rgba(255,255,255,.1); vertical-align: top; }
+  th { color: #f8fafc; font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .note {
+    background: rgba(34,211,238,.08);
+    border: 1px solid rgba(34,211,238,.25);
+    border-radius: .75rem;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+  }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,.1); font-size: .875rem; color: #cbd5e1; }
+  @media (max-width: 480px) { h1 { font-size: 1.625rem; } .wrap { padding: 2rem 1rem 3rem; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Privacy Policy</h1>
+<p class="updated">AI Task Sorter (checklist.bittobyte.qzz.io) &middot; Last updated: 28 July 2026</p>
+
+<p>This policy explains exactly what AI Task Sorter stores, why it stores it, who else sees it, and how you can get it deleted. It is written to be read, not to be skimmed past.</p>
+
+<h2>1. Who runs this service</h2>
+<p>AI Task Sorter is an independent personal project operated by BitToByte (Alejandro Martinez). Contact: <a href="mailto:alejandro.martinez.rmz97@gmail.com">alejandro.martinez.rmz97@gmail.com</a>.</p>
+
+<h2>2. What data is collected</h2>
+<p>Only data you enter yourself. There is no tracking, profiling, advertising, or data collected in the background.</p>
+
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th scope="col">Data</th><th scope="col">Why it is collected</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Username</td>
+      <td>To identify your account and keep your tasks separate from other people's.</td>
+    </tr>
+    <tr>
+      <td>Password</td>
+      <td>To authenticate you. It is hashed with bcrypt and never stored in readable form. Nobody, including the operator, can read your password.</td>
+    </tr>
+    <tr>
+      <td>Your tasks: name, notes/context, scores, time estimates, deadlines, status, subtasks, and parent/child relationships</td>
+      <td>This is the content of the app. It is stored so your list persists between sessions and so the AI can score and sort it.</td>
+    </tr>
+    <tr>
+      <td>Your OpenRouter API key (optional)</td>
+      <td>To call the AI model on your behalf using your own credits. Stored encrypted at rest (Fernet).</td>
+    </tr>
+    <tr>
+      <td>Your Notion integration token and database ID (optional)</td>
+      <td>Only if you enable Notion sync. Used to read and write your Notion tasks. Stored encrypted at rest (Fernet).</td>
+    </tr>
+    <tr>
+      <td>App preferences (scoring modes, column order, model choice)</td>
+      <td>To keep the interface configured the way you left it.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>What is not collected</h3>
+<ul>
+  <li>No email address is required or stored.</li>
+  <li>No analytics, telemetry, advertising, or third-party tracking scripts of any kind.</li>
+  <li>No cookies. Your login session is held in your browser's <code>localStorage</code> and is removed when you log out.</li>
+  <li>No IP-based profiling, fingerprinting, or location data.</li>
+</ul>
+
+<h2>3. Who else receives your data</h2>
+<p>Some features work by sending your data to third parties. This only happens for the features you actively use.</p>
+<ul>
+  <li><strong>OpenRouter</strong> receives the <em>name and context text</em> of a task whenever you ask the app to score, re-evaluate, or sort it, or to generate an action plan. This is required for the AI features to function. See the <a href="https://openrouter.ai/privacy" target="_blank" rel="noopener noreferrer">OpenRouter privacy policy</a>. If you do not want your task text sent to an AI provider, do not use the scoring, sorting, or planning features.</li>
+  <li><strong>Notion</strong> receives and returns your task data only if you connect a Notion integration yourself. See the <a href="https://www.notion.so/privacy" target="_blank" rel="noopener noreferrer">Notion privacy policy</a>.</li>
+  <li><strong>Neon</strong> hosts the Postgres database where your account and tasks are stored.</li>
+  <li><strong>Vercel</strong> hosts the application and serves it to your browser.</li>
+</ul>
+<p>Your data is never sold, rented, or shared for advertising or marketing.</p>
+
+<h2>4. How to delete your data</h2>
+<div class="note">
+  <p style="margin-top:0"><strong>Delete individual tasks:</strong> use the delete control on any task card, or the Archive tab for completed and forgotten tasks.</p>
+  <p><strong>Delete all your tasks at once:</strong> open Settings (the gear icon), then use the "Delete tasks" section. You can choose to remove Notion-synced tasks, local-only tasks, or both.</p>
+  <p style="margin-bottom:0"><strong>Delete your entire account, including your username, encrypted keys, and all remaining data:</strong> email <a href="mailto:alejandro.martinez.rmz97@gmail.com">alejandro.martinez.rmz97@gmail.com</a> from a request that identifies your username, with the subject line "AI Task Sorter: Account Deletion". Your account and all associated records will be permanently erased within 30 days, and you will get a confirmation once it is done. There is currently no self-service account deletion button in the app.</p>
+</div>
+<p>You can also revoke the app's access at any time by deleting the OpenRouter API key or Notion token from your Settings, or by revoking them directly in your OpenRouter and Notion accounts.</p>
+<p>Note that deleting a task inside AI Task Sorter does not delete the corresponding page in Notion. Notion pages are yours to manage in Notion.</p>
+
+<h2>5. Your rights</h2>
+<p>You can ask for a copy of the data held about you, ask for it to be corrected, or ask for it to be erased. Send any of these requests to <a href="mailto:alejandro.martinez.rmz97@gmail.com">alejandro.martinez.rmz97@gmail.com</a> and expect a reply within 30 days. If you are in the EU or UK, these rights are yours under the GDPR, and you may also complain to your national data protection authority.</p>
+
+<h2>6. How long data is kept</h2>
+<p>Your account and tasks are kept for as long as your account exists. Once you request deletion, everything is removed within 30 days. There are no separate backups retained beyond that window.</p>
+
+<h2>7. Security</h2>
+<p>Passwords are hashed with bcrypt. API keys and Notion tokens are encrypted at rest. All traffic is served over HTTPS. This is a personal project rather than an enterprise service, so please use a password you do not reuse elsewhere, and treat it accordingly.</p>
+
+<h2>8. Children</h2>
+<p>This service is not directed at children under 13 and no data is knowingly collected from them.</p>
+
+<h2>9. Changes to this policy</h2>
+<p>If this policy changes in a way that affects what is collected or who receives it, the "last updated" date above will change and a notice will appear in the app.</p>
+
+<footer>
+  <a href="/">Back to AI Task Sorter</a> &middot; <a href="/terms.html">Terms of Service</a>
+</footer>
+
+</div>
+</body>
+</html>

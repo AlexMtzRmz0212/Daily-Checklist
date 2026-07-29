@@ -27,25 +27,29 @@ function BrandFooter() {
         padding: "24px 16px",
         textAlign: "center",
         fontSize: 13,
-        color: "#9ca3af",
+        color: "#cbd5e1",
       }}
     >
       <div style={{ marginBottom: 8 }}>
         © {new Date().getFullYear()} BitToByte
       </div>
-      <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+      <nav aria-label="Legal" style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <a href="/privacy.html" style={{ color: "#e2e8f0", textDecoration: "underline" }}>Privacy Policy</a>
+        <a href="/terms.html" style={{ color: "#e2e8f0", textDecoration: "underline" }}>Terms of Service</a>
+      </nav>
+      <nav aria-label="More from BitToByte" style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
         {links.map((l) => (
           <a
             key={l.href}
             href={l.href}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: "#9ca3af", textDecoration: "none" }}
+            style={{ color: "#cbd5e1", textDecoration: "none" }}
           >
             {l.label}
           </a>
         ))}
-      </div>
+      </nav>
     </footer>
   );
 }
@@ -133,7 +137,7 @@ function SortInfo() {
         {steps.map(([label, hint], i) => (
           <li key={label} className="flex gap-2">
             <span className="text-purple-400 font-black">{i + 1}.</span>
-            <span><span className="text-gray-200">{label}</span> <span className="text-gray-500">({hint})</span></span>
+            <span><span className="text-gray-200">{label}</span> <span className="text-gray-400">({hint})</span></span>
           </li>
         ))}
       </ol>
@@ -390,7 +394,7 @@ function MainApp() {
       });
       setNotionConnected(res.connected);
       setNotionToken(""); // never keep the token in the field
-      setNotionMsg(res.connected ? "Notion connected." : "Saved — add a token to connect.");
+      setNotionMsg(res.connected ? "Notion connected." : "Saved. Add a token to connect.");
       setNotionPhase("idle");
     } catch (e) { setNotionError(e.message); setNotionPhase("idle"); }
   };
@@ -434,7 +438,7 @@ function MainApp() {
       setArchiveRefresh((n) => n + 1);
       setDeleteAllCounts(null);
       setDeleteAllPhase("idle");
-      setNotionMsg(`Deleted ${res.deleted} task(s) — ${res.notion} from Notion, ${res.local} local.`);
+      setNotionMsg(`Deleted ${res.deleted} task(s): ${res.notion} from Notion, ${res.local} local.`);
     } catch (e) { setDeleteAllError(e.message); setDeleteAllPhase("idle"); }
   };
 
@@ -792,7 +796,7 @@ function MainApp() {
               onClick={handleSort} disabled={isSorting}
               title="Sort & save"
               className="px-3 md:px-6 h-9 rounded-b-xl flex items-center justify-center font-black text-sm tracking-[0.2em] uppercase disabled:opacity-40"
-              style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(124,58,237,0.4)", borderTop: "none", boxShadow: "0 6px 24px rgba(124,58,237,0.3)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
+              style={{ background: "#0891b2", border: "1px solid rgba(34,211,238,0.45)", borderTop: "none", boxShadow: "0 6px 24px rgba(8,145,178,0.35)", backdropFilter: "blur(8px)", fontFamily: "inherit" }}
               whileHover={{ scale: 1.05, y: 2 }} whileTap={{ scale: 0.95 }}>
               {isSorting
                 ? <span className="flex items-center gap-2"><Spinner /><span className="hidden md:inline">SORTING…</span></span>
@@ -836,30 +840,27 @@ function MainApp() {
               onClick={(e) => e.stopPropagation()}>
 
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-black" style={{
-                  background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 100%)",
-                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-                }}>⚙️ Configuration</h2>
-                <button onClick={() => setShowConfigModal(false)} className="text-gray-600 hover:text-gray-400 text-xl">✕</button>
+                <h2 className="text-xl font-black" style={{ color: "#22d3ee" }}>⚙️ Configuration</h2>
+                <button onClick={() => setShowConfigModal(false)} aria-label="Close configuration" className="text-gray-400 hover:text-white text-xl">✕</button>
               </div>
 
               {/* Model input */}
               <div className="mb-6">
-                <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">
+                <label className="block text-[10px] font-black tracking-widest text-gray-400 uppercase mb-2">
                   OpenRouter Model
                 </label>
                 <input
                   value={newModel} onChange={(e) => setNewModel(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSaveModel()}
                   placeholder="e.g., anthropic/claude-3.5-sonnet"
-                  className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all mb-2"
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none transition-all mb-2"
                   style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                   onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                   onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
-                <p className="text-[10px] text-gray-600">
+                <p className="text-[10px] text-gray-400">
                   Current model: <span className="text-cyan-400">{currentModel || "Not set"}</span>
                 </p>
-                <p className="text-[10px] text-gray-700 mt-2">
+                <p className="text-[10px] text-gray-400 mt-2">
                   Find models at{" "}
                   <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">
                     openrouter.ai/models
@@ -869,7 +870,7 @@ function MainApp() {
 
               {/* API Key Input */}
               <div className="mb-6">
-                <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">
+                <label className="block text-[10px] font-black tracking-widest text-gray-400 uppercase mb-2">
                   Personal OpenRouter API Key
                 </label>
                 <div className="flex gap-2">
@@ -878,7 +879,7 @@ function MainApp() {
                     value={newApiKey} onChange={(e) => setNewApiKey(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSaveApiKey()}
                     placeholder="sk-or-v1-..."
-                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all"
+                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none transition-all"
                     style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                     onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                     onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
@@ -890,14 +891,14 @@ function MainApp() {
                   </motion.button>
                 </div>
                 {apiKeyError && <p className="text-red-400 text-xs mt-2">⚠ {apiKeyError}</p>}
-                <p className="text-[10px] text-gray-600 mt-2">
+                <p className="text-[10px] text-gray-400 mt-2">
                   Your key is securely encrypted. Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:underline">openrouter.ai/keys</a>
                 </p>
               </div>
 
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-3">
-                  <label className="text-[10px] font-black tracking-widest text-gray-600 uppercase">
+                  <label className="text-[10px] font-black tracking-widest text-gray-400 uppercase">
                     Scoring Modes & Order
                   </label>
                   <span className="text-[9px] px-2 py-0.5 rounded-full font-black"
@@ -905,8 +906,8 @@ function MainApp() {
                     Binary = default · Drag to reorder
                   </span>
                 </div>
-                <p className="text-[10px] text-gray-600 mb-3">
-                  Hierarchy &amp; Priority live in the <span className="text-amber-400">🎯 Matrix</span> tab now — always scale, 1 = highest.
+                <p className="text-[10px] text-gray-400 mb-3">
+                  Hierarchy &amp; Priority live in the <span className="text-amber-400">🎯 Matrix</span> tab now. Always scale, 1 = highest.
                 </p>
                 <DndProvider>
                   <ReorderablePropertyList
@@ -944,7 +945,7 @@ function MainApp() {
               {/* Notion Sync */}
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-3">
-                  <label className="text-[10px] font-black tracking-widest text-gray-600 uppercase">
+                  <label className="text-[10px] font-black tracking-widest text-gray-400 uppercase">
                     Notion Sync
                   </label>
                   <span className="text-[9px] px-2 py-0.5 rounded-full font-black"
@@ -959,7 +960,7 @@ function MainApp() {
                   type="password"
                   value={notionToken} onChange={(e) => setNotionToken(e.target.value)}
                   placeholder={notionConnected ? "Integration token (leave blank to keep current)" : "secret_..."}
-                  className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all mb-2"
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none transition-all mb-2"
                   style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                   onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                   onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
@@ -968,7 +969,7 @@ function MainApp() {
                     value={notionDbId} onChange={(e) => setNotionDbId(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSaveNotion()}
                     placeholder="Database ID"
-                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none transition-all"
+                    className="flex-1 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none transition-all"
                     style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                     onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                     onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
@@ -997,7 +998,7 @@ function MainApp() {
 
                 {notionError && <p className="text-red-400 text-xs mt-2">⚠ {notionError}</p>}
                 {notionMsg   && <p className="text-emerald-400 text-xs mt-2">{notionMsg}</p>}
-                <p className="text-[10px] text-gray-600 mt-2">
+                <p className="text-[10px] text-gray-400 mt-2">
                   Your token is encrypted. Import pulls tasks + parent tree; Push writes Hierarchy/Priority back.
                 </p>
               </div>
@@ -1007,8 +1008,8 @@ function MainApp() {
                 <label className="flex items-center gap-2 text-[10px] font-black tracking-widest text-red-400 uppercase mb-2">
                   ⚠ Danger Zone
                 </label>
-                <p className="text-[10px] text-gray-500 mb-3">
-                  Permanently delete your tasks — active, archived, categories and subtasks. You&apos;ll choose whether to remove Notion-synced tasks, local ones, or both. Notion pages are not touched, so synced tasks can return on your next import.
+                <p className="text-[10px] text-gray-400 mb-3">
+                  Permanently delete your tasks: active, archived, categories and subtasks. You&apos;ll choose whether to remove Notion-synced tasks, local ones, or both. Notion pages are not touched, so synced tasks can return on your next import.
                 </p>
                 <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                   onClick={handleOpenDeleteAll} disabled={deleteAllPhase !== "idle"}
@@ -1067,7 +1068,7 @@ function MainApp() {
                     <div className="flex items-center justify-center gap-1.5 mb-1">
                       <span className="text-xs" style={{ color: on && !empty ? "#f87171" : "#475569" }}>{on && !empty ? "☑" : "☐"}</span>
                       <OriginBadge notion={notionGlyph} size={13} />
-                      <span className="text-[10px] font-black tracking-widest text-gray-500 uppercase">{label}</span>
+                      <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase">{label}</span>
                     </div>
                     <p className="text-2xl font-black" style={{ color: on && !empty ? "#fff" : "#64748b" }}>{count}</p>
                   </button>
@@ -1083,8 +1084,8 @@ function MainApp() {
                 <Square which="notion" label="Notion" notionGlyph={true}  count={deleteAllCounts.notion} />
                 <Square which="local"  label="Local"  notionGlyph={false} count={deleteAllCounts.local} />
               </div>
-              <p className="text-[10px] text-gray-600 mb-4">
-                Notion pages aren&apos;t deleted — synced tasks can return on your next import.
+              <p className="text-[10px] text-gray-400 mb-4">
+                Notion pages aren&apos;t deleted, so synced tasks can return on your next import.
               </p>
               {deleteAllError && <p className="text-red-400 text-xs mb-3">⚠ {deleteAllError}</p>}
               <div className="flex gap-3">
@@ -1120,7 +1121,7 @@ function MainApp() {
             <SpinRing color="cyan" />
             <div className="text-center">
               <p className="text-cyan-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Sorting Tasks</p>
-              <p className="text-gray-600 text-xs tracking-widest">evaluating urgency × importance matrix…</p>
+              <p className="text-gray-400 text-xs tracking-widest">evaluating urgency × importance matrix…</p>
             </div>
             <motion.button initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
               whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleInterrupt}
@@ -1144,7 +1145,7 @@ function MainApp() {
                 <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">
                   {revalPhase === "loading" ? "Re-evaluating" : "Re-evaluation complete"}
                 </p>
-                <p className="text-gray-500 text-xs tracking-widest">
+                <p className="text-gray-400 text-xs tracking-widest">
                   {revalDone} / {revalTotal} scored{revalFailed ? ` · ${revalFailed} failed` : ""}
                 </p>
               </div>
@@ -1154,7 +1155,7 @@ function MainApp() {
             <div className="w-full max-w-md h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
               <motion.div
                 className="h-full"
-                style={{ background: revalFailed ? "linear-gradient(90deg,#a855f7,#ef4444)" : "linear-gradient(90deg,#7c3aed,#22d3ee)" }}
+                style={{ background: revalFailed ? "#ef4444" : "#22d3ee" }}
                 initial={{ width: 0 }}
                 animate={{ width: `${revalTotal ? (revalDone / revalTotal) * 100 : 0}%` }}
                 transition={{ duration: 0.3 }} />
@@ -1164,7 +1165,7 @@ function MainApp() {
             <div className="w-full max-w-md max-h-64 overflow-y-auto rounded-xl p-2 space-y-1"
               style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(255,255,255,0.06)" }}>
               {revalResults.length === 0 && (
-                <p className="text-gray-600 text-xs text-center py-4">Starting…</p>
+                <p className="text-gray-400 text-xs text-center py-4">Starting…</p>
               )}
               {revalResults.map((r) => (
                 <div key={r.task_id} className="flex items-start gap-2 px-2 py-1 text-xs">
@@ -1188,7 +1189,7 @@ function MainApp() {
               <div className="text-center">
                 {revalFailed > 0 && (
                   <p className="text-amber-400/90 text-xs mb-3">
-                    {revalFailed} task{revalFailed !== 1 ? "s" : ""} failed — check your OpenRouter model &amp; API credits.
+                    {revalFailed} task{revalFailed !== 1 ? "s" : ""} failed. Check your OpenRouter model &amp; API credits.
                   </p>
                 )}
                 <motion.button whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.92 }} onClick={handleCloseReeval}
@@ -1238,17 +1239,17 @@ function MainApp() {
               style={{ background: "#0f172a", border: "1px solid rgba(251,146,60,0.3)" }}>
               <p className="text-orange-400 text-xs tracking-[0.3em] uppercase mb-1">⏰ POSTPONE</p>
               <h2 className="text-white text-lg font-black mb-1">See you tomorrow</h2>
-              <p className="text-gray-500 text-xs mb-5 truncate">"{postponeTarget.Name}"</p>
-              <p className="text-gray-400 text-sm mb-2">Why are you postponing? <span className="text-gray-600">(optional)</span></p>
+              <p className="text-gray-400 text-xs mb-5 truncate">"{postponeTarget.Name}"</p>
+              <p className="text-gray-400 text-sm mb-2">Why are you postponing? <span className="text-gray-400">(optional)</span></p>
               <textarea
                 value={postponeReason} onChange={(e) => setPostponeReason(e.target.value)}
                 placeholder="Blocked by something else, waiting for info, etc…"
                 rows={3}
-                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none resize-none mb-5"
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none resize-none mb-5"
                 style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                 onFocus={(e) => (e.target.style.borderColor = "rgba(251,146,60,0.5)")}
                 onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
-              <p className="text-gray-600 text-[10px] mb-5">
+              <p className="text-gray-400 text-[10px] mb-5">
                 This reason will be added to the task's context when it reappears tomorrow.
               </p>
               <div className="flex flex-col gap-3">
@@ -1279,29 +1280,29 @@ function MainApp() {
               <p className="text-cyan-400 text-xs tracking-[0.3em] uppercase mb-1">✎ EDIT TASK</p>
               <h2 className="text-white text-lg font-black mb-5">Rename &amp; re-context</h2>
 
-              <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">Task name</label>
+              <label className="block text-[10px] font-black tracking-widest text-gray-400 uppercase mb-2">Task name</label>
               <input
                 value={editForm.name}
                 onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
                 onKeyDown={(e) => e.key === "Enter" && handleEditSave()}
                 placeholder="Task name…"
-                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none mb-4"
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none mb-4"
                 style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                 onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                 onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
 
-              <label className="block text-[10px] font-black tracking-widest text-gray-600 uppercase mb-2">Context</label>
+              <label className="block text-[10px] font-black tracking-widest text-gray-400 uppercase mb-2">Context</label>
               <textarea
                 value={editForm.context}
                 onChange={(e) => setEditForm((f) => ({ ...f, context: e.target.value }))}
                 placeholder="Context / description…"
                 rows={3}
-                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none resize-none mb-2"
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none resize-none mb-2"
                 style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
                 onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                 onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
-              <p className="text-gray-600 text-[10px] mb-5">
-                Editing names/context does not re-score the task — use ↺ Evaluate for that.
+              <p className="text-gray-400 text-[10px] mb-5">
+                Editing names/context does not re-score the task. Use ↺ Evaluate for that.
               </p>
 
               {editError && <p className="text-red-400 text-xs mb-3">⚠ {editError}</p>}
@@ -1322,12 +1323,9 @@ function MainApp() {
       {/* Main */}
       <div className={`relative max-w-full lg:max-w-[90rem] xl:max-w-[100rem] 2xl:max-w-[120rem] mx-auto px-4 pt-3 pb-10 transition-opacity duration-300 ${isSorting || isRevaluating ? "pointer-events-none opacity-40" : ""}`}>
         <header className="mb-4 text-left">
-          <h1 className="text-lg font-black tracking-tight leading-none" style={{
-            background: "linear-gradient(135deg,#22d3ee 0%,#a78bfa 50%,#f472b6 100%)",
-            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-          }}>DAILY CHECKLIST SORTER</h1>
+          <h1 className="text-lg font-black tracking-tight leading-none" style={{ color: "#22d3ee" }}>AI TASK SORTER</h1>
           <a href="https://bittobyte.qzz.io" target="_blank" rel="noopener noreferrer"
-            className="inline-block text-[10px] font-semibold tracking-widest uppercase text-gray-500 hover:text-cyan-400 transition-colors mt-0.5">
+            className="inline-block text-[10px] font-semibold tracking-widest uppercase text-gray-400 hover:text-cyan-400 transition-colors mt-0.5">
             By BitToByte
           </a>
         </header>
@@ -1387,18 +1385,18 @@ function MainApp() {
 
           {inputMode === "bulk" && (
             <div className="flex flex-col gap-3">
-              <p className="text-[10px] text-gray-600">
-                One task per line · Format: <span className="text-gray-400">Task name</span> | <span className="text-gray-500">context</span>
+              <p className="text-[10px] text-gray-400">
+                One task per line · Format: <span className="text-gray-400">Task name</span> | <span className="text-gray-400">context</span>
               </p>
               <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)}
                 disabled={bulkPhase === "loading"} rows={6}
                 placeholder={"Fix login bug | auth service is down\nWrite Q3 report\nReview pull requests | 3 PRs waiting"}
-                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-700 outline-none resize-y"
+                className="w-full rounded-xl px-4 py-3 text-sm text-white placeholder-gray-400 outline-none resize-y"
                 style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit", lineHeight: "1.6" }}
                 onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
                 onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
               <div className="flex items-center justify-between gap-3">
-                <p className="text-[10px] text-gray-600">
+                <p className="text-[10px] text-gray-400">
                   {bulkItems.length > 0 ? `${bulkItems.length} task${bulkItems.length !== 1 ? "s" : ""} detected` : "No tasks yet"}
                 </p>
                 <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.95 }} onClick={handleBulkAdd}
@@ -1432,7 +1430,7 @@ function MainApp() {
         {/* Controls bar — always shown so the Archive tab stays reachable with 0 active tasks */}
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
             <div className="flex items-center gap-3">
-              <p className="text-[10px] text-gray-600 uppercase tracking-widest">
+              <p className="text-[10px] text-gray-400 uppercase tracking-widest">
                 {tasks.length} active{hasUnsavedEdits ? " · ● unsaved edits" : ""}
               </p>
               <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "#1e293b" }}>
@@ -1442,7 +1440,7 @@ function MainApp() {
                   return (
                   <button key={mode} onClick={() => setViewMode(mode)}
                     className={`px-3 py-1.5 rounded-md text-[10px] font-black tracking-wider uppercase transition-all ${
-                      viewMode === mode ? accentText : "text-gray-600 hover:text-gray-400"
+                      viewMode === mode ? accentText : "text-gray-400 hover:text-gray-400"
                     }`}
                     style={{ background: viewMode === mode ? accentBg : "transparent" }}>
                     {label}
@@ -1555,8 +1553,8 @@ function MainApp() {
         {tasks.length === 0 && (viewMode === "stats" || viewMode === "table") && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
             <p className="text-6xl mb-5">📋</p>
-            <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
-            <p className="text-gray-700 text-xs mt-2">Add a task above — the AI will score it automatically.</p>
+            <p className="text-gray-400 font-black tracking-widest text-sm uppercase">No active tasks</p>
+            <p className="text-gray-400 text-xs mt-2">Add a task above and the AI will score it automatically.</p>
           </motion.div>
         )}
       </div>
@@ -1618,7 +1616,7 @@ function ArchiveView({ refreshSignal, onRestore, onDelete }) {
   const forgotten = tasks.filter((t) => t.Status === "Forgotten");
 
   if (phase === "loading") {
-    return <div className="flex items-center justify-center py-24 text-gray-500"><Spinner /> <span className="ml-3 text-xs uppercase tracking-widest">Loading archive…</span></div>;
+    return <div className="flex items-center justify-center py-24 text-gray-400"><Spinner /> <span className="ml-3 text-xs uppercase tracking-widest">Loading archive…</span></div>;
   }
   if (phase === "error") {
     return <p className="text-red-400 text-xs py-8">⚠ Could not load archive: {error}</p>;
@@ -1627,8 +1625,8 @@ function ArchiveView({ refreshSignal, onRestore, onDelete }) {
     return (
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-24">
         <p className="text-6xl mb-5">🗄️</p>
-        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">Archive is empty</p>
-        <p className="text-gray-700 text-xs mt-2">Completed and forgotten tasks will collect here.</p>
+        <p className="text-gray-400 font-black tracking-widest text-sm uppercase">Archive is empty</p>
+        <p className="text-gray-400 text-xs mt-2">Completed and forgotten tasks will collect here.</p>
       </motion.div>
     );
   }
@@ -1637,7 +1635,7 @@ function ArchiveView({ refreshSignal, onRestore, onDelete }) {
     <div className="mb-6">
       <div className="flex items-center gap-2 mb-2">
         <h3 className="text-[11px] font-black tracking-widest uppercase" style={{ color }}>{label}</h3>
-        <span className="text-[10px] text-gray-600">{items.length}</span>
+        <span className="text-[10px] text-gray-400">{items.length}</span>
       </div>
       <div className="flex flex-col gap-2">
         {items.map((t) => (
@@ -1648,14 +1646,15 @@ function ArchiveView({ refreshSignal, onRestore, onDelete }) {
   );
 
   return (
-    <div>
-      <div className="mb-4 px-3 py-2 rounded-lg text-[10px] text-gray-500"
+    <section aria-labelledby="archive-heading">
+      <h2 id="archive-heading" className="sr-only">Archive</h2>
+      <div className="mb-4 px-3 py-2 rounded-lg text-[10px] text-gray-400"
         style={{ background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.15)" }}>
         ⚠ Deleting removes a task from here permanently. A task synced from Notion may reappear on your next Notion import.
       </div>
       {renderSection("✓ Done", done, "#34d399")}
       {renderSection("✕ Forgotten", forgotten, "#94a3b8")}
-    </div>
+    </section>
   );
 }
 
@@ -1673,10 +1672,7 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
       style={{ background: "#0f172a", border: "1px solid rgba(139,92,246,0.25)" }}>
 
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-black" style={{
-          background: "linear-gradient(135deg,#a78bfa 0%,#22d3ee 100%)",
-          WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-        }}>🤖 AI Action Plan</h2>
+        <h2 className="text-xl font-black" style={{ color: "#a78bfa" }}>🤖 AI Action Plan</h2>
         <motion.button
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
           onClick={onGenerate}
@@ -1698,7 +1694,7 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
           <SpinRing color="purple" />
           <div className="text-center">
             <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Building Plan</p>
-            <p className="text-gray-600 text-xs tracking-widest">analyzing task relationships…</p>
+            <p className="text-gray-400 text-xs tracking-widest">analyzing task relationships…</p>
           </div>
         </div>
       )}
@@ -1706,8 +1702,8 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
       {!isLoading && !aiPlanResult && (
         <div className="text-center py-20">
           <p className="text-5xl mb-4">🤖</p>
-          <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No plan yet</p>
-          <p className="text-gray-700 text-xs mt-2">
+          <p className="text-gray-400 font-black tracking-widest text-sm uppercase">No plan yet</p>
+          <p className="text-gray-400 text-xs mt-2">
             {hasTasks ? "Click Generate Plan to have AI create an action plan for your tasks." : "Add tasks first, then generate a plan."}
           </p>
         </div>
@@ -1872,7 +1868,7 @@ function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
             {ln.isCollapsed ? "▸" : "▾"}
           </button>
         ) : (
-          <span className="inline-block w-4 text-center text-gray-700">◦</span>
+          <span className="inline-block w-4 text-center text-gray-400">◦</span>
         )}
         <span>{ln.icon} </span>{originMark}<span>{ln.name} [{ln.status}]</span>
       </div>
@@ -1970,7 +1966,7 @@ function TaskFlowNode({ data }) {
           <span className="inline-block transition-transform duration-200"
             style={{ transform: `rotate(${rotateDeg}deg)` }}>▶</span>
         </button>
-      ) : <span className="text-gray-700 text-xs w-4 text-center flex-shrink-0">◦</span>}
+      ) : <span className="text-gray-400 text-xs w-4 text-center flex-shrink-0">◦</span>}
       <span className="flex-shrink-0 rounded-full" title={task.Status}
         style={{ width: 7, height: 7, background: statusColor(task.Status) }} />
       <OriginBadge notion={!!task.Notion_Page_ID} size={12} />
@@ -2220,7 +2216,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
       const res = await apiFetch(`/tasks/${childId}/parent`, {
         method: "PATCH", body: JSON.stringify({ parent_id: parentId }),
       });
-      setMsg(res.notion_synced === false ? "⚠ Moved locally — Notion sync failed." : "✓ Moved.");
+      setMsg(res.notion_synced === false ? "⚠ Moved locally. Notion sync failed." : "✓ Moved.");
       load();
     } catch (e) { setMsg(`⚠ Move failed: ${e.message}`); load(); }
   }, [load]);
@@ -2239,7 +2235,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
       let ok = false;
       try { ok = document.execCommand("copy"); } catch { /* ignore */ }
       document.body.removeChild(ta);
-      setMsg(ok ? "✓ Copied to clipboard." : "⚠ Copy failed — select the text and copy manually.");
+      setMsg(ok ? "✓ Copied to clipboard." : "⚠ Copy failed. Select the text and copy manually.");
     };
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).then(() => setMsg("✓ Copied to clipboard.")).catch(fallback);
@@ -2282,7 +2278,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
   }, [nodeMap, onEdit]);
 
   if (phase === "loading") {
-    return <div className="text-center py-24 text-gray-500 text-sm flex items-center justify-center gap-3"><Spinner /> Loading tree…</div>;
+    return <div className="text-center py-24 text-gray-400 text-sm flex items-center justify-center gap-3"><Spinner /> Loading tree…</div>;
   }
   if (phase === "error") {
     return <div className="text-center py-24 text-red-400 text-sm">⚠ {error}</div>;
@@ -2291,8 +2287,8 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
     return (
       <div className="text-center py-24">
         <p className="text-6xl mb-5">🌲</p>
-        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No tasks yet</p>
-        <p className="text-gray-700 text-xs mt-2">Import from Notion (⚙️ Settings) or add tasks to grow the tree.</p>
+        <p className="text-gray-400 font-black tracking-widest text-sm uppercase">No tasks yet</p>
+        <p className="text-gray-400 text-xs mt-2">Import from Notion (⚙️ Settings) or add tasks to grow the tree.</p>
       </div>
     );
   }
@@ -2310,12 +2306,12 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
       style={isFullscreen ? { background: "#0a0a0f" } : undefined}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <p className="text-[10px] text-gray-600 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
+          <p className="text-[10px] text-gray-400 uppercase tracking-widest">{taskCount} tasks · {categoryCount} categories · {subtaskCount} subtasks</p>
           <div className="flex items-center gap-1 rounded-lg p-0.5" style={{ background: "rgba(255,255,255,0.04)" }}>
             {[["text", "📄 Text"], ["flow", "🌲 Flow"]].map(([mode, label]) => (
               <button key={mode} onClick={() => setTreeMode(mode)}
                 className={`text-[10px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md transition-colors ${
-                  treeMode === mode ? "text-emerald-400" : "text-gray-600 hover:text-gray-400"
+                  treeMode === mode ? "text-emerald-400" : "text-gray-400 hover:text-gray-400"
                 }`}
                 style={{ background: treeMode === mode ? "rgba(16,185,129,0.15)" : "transparent" }}>
                 {label}
@@ -2338,7 +2334,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
                     <motion.button key={mode} onClick={() => setLayoutMode(mode)}
                       variants={{ hidden: { opacity: 0, scale: 0.8, x: -4 }, show: { opacity: 1, scale: 1, x: 0 } }}
                       className={`text-[10px] font-black tracking-widest uppercase px-2.5 py-1 rounded-md transition-colors ${
-                        layoutMode === mode ? "text-cyan-400" : "text-gray-600 hover:text-gray-400"
+                        layoutMode === mode ? "text-cyan-400" : "text-gray-400 hover:text-gray-400"
                       }`}
                       style={{ background: layoutMode === mode ? "rgba(34,211,238,0.15)" : "transparent" }}>
                       {label}
@@ -2395,7 +2391,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
       </div>
       )}
 
-      <p className="text-[10px] text-gray-700">
+      <p className="text-[10px] text-gray-400">
         {treeMode === "text"
           ? "Click ▸/▾ to fold branches · Select the text (or hit ⧉ Copy) to paste the full tree · ☑/☐ mark subtask completion."
           : "Drag a node onto another to re-parent it (synced to Notion when linked) · click ▸/▾ to collapse · double-click a card to edit · scroll to zoom."}
@@ -2419,7 +2415,7 @@ function TreeCanvasInner({ refreshSignal, onEdit }) {
                 Move <span className="text-white font-bold">"{pendingMove.childName}"</span> under{" "}
                 <span className="text-white font-bold">"{pendingMove.parentName}"</span>?
               </p>
-              <p className="text-gray-600 text-[10px] mb-6">
+              <p className="text-gray-400 text-[10px] mb-6">
                 This changes the task's parent and, when the task is linked, writes the new hierarchy back to Notion.
               </p>
               <div className="flex flex-col gap-3">
@@ -2574,8 +2570,8 @@ function MatrixView({ tasks, onPersist }) {
     return (
       <div className="text-center py-24">
         <p className="text-6xl mb-5">🎯</p>
-        <p className="text-gray-500 font-black tracking-widest text-sm uppercase">No active tasks</p>
-        <p className="text-gray-700 text-xs mt-2">Add tasks — the AI seeds their Priority &amp; Hierarchy, then drag to arrange.</p>
+        <p className="text-gray-400 font-black tracking-widest text-sm uppercase">No active tasks</p>
+        <p className="text-gray-400 text-xs mt-2">Add tasks and the AI seeds their Priority &amp; Hierarchy, then drag to arrange.</p>
       </div>
     );
   }
@@ -2583,7 +2579,7 @@ function MatrixView({ tasks, onPersist }) {
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-        <p className="text-[10px] text-gray-600 uppercase tracking-widest">
+        <p className="text-[10px] text-gray-400 uppercase tracking-widest">
           One list, wrapped at 10 · reads left→right, top→bottom · drag to reposition
         </p>
         <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
@@ -2600,7 +2596,7 @@ function MatrixView({ tasks, onPersist }) {
             <tr>
               <th className="sticky left-0 z-10 p-2" style={{ background: "#0b1220" }}></th>
               {Array.from({ length: cols }, (_, i) => i + 1).map((c) => (
-                <th key={c} className="p-2 text-[10px] font-black tracking-widest uppercase text-gray-500 text-center"
+                <th key={c} className="p-2 text-[10px] font-black tracking-widest uppercase text-gray-400 text-center"
                   style={{ minWidth: 160 }}>
                   Hierarchy {c}
                 </th>
@@ -2818,7 +2814,7 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
     <>
       <tr className={`border-t border-white/5 transition-colors ${rowClickable ? "cursor-pointer" : ""} ${evalMode && isSelected ? "bg-indigo-950/40" : "hover:bg-white/[0.03]"}`} onClick={() => { if (evalMode) toggleSelection(task.Task_ID); else onToggleExpand(); }}>
         {/* Rank / Checkbox */}
-        <td className="px-4 py-3 text-center text-xs text-gray-600 select-none">
+        <td className="px-4 py-3 text-center text-xs text-gray-400 select-none">
           {evalMode ? (
             <div className={`w-5 h-5 inline-flex items-center justify-center rounded border ${isSelected ? 'border-purple-500 bg-purple-500 text-white' : 'border-gray-600 text-transparent'}`}>
               ✓
@@ -2846,11 +2842,11 @@ function TaskTableRow({ task, index, getVal, adjustProp, propertyModes, property
               ) : (
                 <motion.span
                   animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}
-                  className="text-[8px] text-gray-700" title="Add subtasks">▼</motion.span>
+                  className="text-[8px] text-gray-400" title="Add subtasks">▼</motion.span>
               )}
             </div>
             {task.Context && (
-              <div className="text-xs text-gray-600 mt-0.5 truncate max-w-xs">{task.Context}</div>
+              <div className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">{task.Context}</div>
             )}
           </div>
         </td>
@@ -2950,9 +2946,9 @@ function StatsView({ tasks, getVal }) {
   const StatTile = ({ label, value, sub, color }) => (
     <div className="rounded-2xl px-4 py-3 flex flex-col gap-0.5"
       style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
-      <p className="text-[9px] font-black tracking-widest uppercase text-gray-600">{label}</p>
+      <p className="text-[9px] font-black tracking-widest uppercase text-gray-400">{label}</p>
       <p className="text-2xl font-black leading-tight" style={{ color: color || "#e2e8f0" }}>{value}</p>
-      {sub && <p className="text-[10px] text-gray-600">{sub}</p>}
+      {sub && <p className="text-[10px] text-gray-400">{sub}</p>}
     </div>
   );
 
@@ -2966,7 +2962,7 @@ function StatsView({ tasks, getVal }) {
         <StatTile label="Avg Focus Score" value={`${avgHeat}%`} sub="urgency × importance" color={heatColorOf(Math.round(avgHeat / 10))} />
         <div className="rounded-2xl px-4 py-3 flex flex-col gap-1.5"
           style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <p className="text-[9px] font-black tracking-widest uppercase text-gray-600">Priority Mix</p>
+          <p className="text-[9px] font-black tracking-widest uppercase text-gray-400">Priority Mix</p>
           <div className="flex h-2.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
             {bands.map((b) => b.n > 0 && (
               <div key={b.label} title={`${b.label}: ${b.n}`}
@@ -2975,7 +2971,7 @@ function StatsView({ tasks, getVal }) {
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-0.5">
             {bands.map((b) => (
-              <span key={b.label} className="flex items-center gap-1 text-[9px] text-gray-500">
+              <span key={b.label} className="flex items-center gap-1 text-[9px] text-gray-400">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: b.color }} />{b.label} {b.n}
               </span>
             ))}
@@ -2989,7 +2985,7 @@ function StatsView({ tasks, getVal }) {
         <StatTile label="Critical Tasks" value={criticalCount}
           sub={count ? `${Math.round((criticalCount / count) * 100)}% of queue` : "focus ≥ 80%"} color="#ef4444" />
         <StatTile label="Quick Wins" value={quickWins} sub="≤ 30 min each" color="#22d3ee" />
-        <StatTile label="Longest Task" value={longest ? formatMinutes(longest) : "—"} sub="biggest single effort" color="#a855f7" />
+        <StatTile label="Longest Task" value={longest ? formatMinutes(longest) : "N/A"} sub="biggest single effort" color="#a855f7" />
       </div>
 
       {/* ── Dashboard: average scores ── */}
@@ -3005,7 +3001,7 @@ function StatsView({ tasks, getVal }) {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {/* Average score by property */}
           <div className="rounded-2xl px-5 py-4" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-4">Average Score by Property</p>
+            <p className="text-[9px] font-black tracking-widest uppercase text-gray-400 mb-4">Average Score by Property</p>
             <div className="flex flex-col gap-3">
               {scoreProps.map((p) => {
                 const v = avgOf(p.key);
@@ -3052,14 +3048,14 @@ function StatsView({ tasks, getVal }) {
               </svg>
             </div>
             <div className="flex-1">
-              <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-3">Priority Mix</p>
+              <p className="text-[9px] font-black tracking-widest uppercase text-gray-400 mb-3">Priority Mix</p>
               <div className="flex flex-col gap-1.5">
                 {bands.map((b) => (
                   <div key={b.label} className="flex items-center gap-2 text-[11px]">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: b.color }} />
                     <span className="text-gray-400 flex-1">{b.label}</span>
                     <span className="font-mono font-bold" style={{ color: b.color }}>{b.n}</span>
-                    <span className="text-gray-600 w-9 text-right">{count ? Math.round((b.n / count) * 100) : 0}%</span>
+                    <span className="text-gray-400 w-9 text-right">{count ? Math.round((b.n / count) * 100) : 0}%</span>
                   </div>
                 ))}
               </div>
@@ -3068,9 +3064,9 @@ function StatsView({ tasks, getVal }) {
 
           {/* Time distribution — longest tasks */}
           <div className="rounded-2xl px-5 py-4 lg:col-span-2" style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.06)" }}>
-            <p className="text-[9px] font-black tracking-widest uppercase text-gray-600 mb-4">Longest Tasks by Time</p>
+            <p className="text-[9px] font-black tracking-widest uppercase text-gray-400 mb-4">Longest Tasks by Time</p>
             {topByTime.length === 0 ? (
-              <p className="text-xs text-gray-600">No timed tasks yet.</p>
+              <p className="text-xs text-gray-400">No timed tasks yet.</p>
             ) : (
               <div className="flex flex-col gap-2.5">
                 {topByTime.map((t) => {
@@ -3149,7 +3145,7 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
       style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
       <div className="flex items-center justify-between px-3 py-2"
         style={{ borderBottom: subtasks.length || suggestPhase !== "idle" ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
-        <p className="text-[9px] font-black tracking-widest text-gray-600 uppercase">
+        <p className="text-[9px] font-black tracking-widest text-gray-400 uppercase">
           Subtasks {subtasks.length > 0 && `(${subtasks.filter((s) => s.done).length}/${subtasks.length})`}
         </p>
         <button onClick={handleSuggest} disabled={suggestPhase === "loading"}
@@ -3214,7 +3210,7 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
         <input value={newName} onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleAddManual()}
           placeholder="Add a subtask…"
-          className="flex-1 bg-transparent text-xs text-white placeholder-gray-700 outline-none"
+          className="flex-1 bg-transparent text-xs text-white placeholder-gray-400 outline-none"
           style={{ fontFamily: "inherit" }} />
         <button onClick={handleAddManual} disabled={!newName.trim() || addingPhase === "loading"}
           className="text-[9px] font-black tracking-widest px-2 py-1 rounded-lg transition-all disabled:opacity-30"
@@ -3438,7 +3434,7 @@ function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onMo
             {/* Drag handle */}
             <span
               data-drag-handle
-              className="text-gray-600 hover:text-gray-400 text-sm cursor-grab active:cursor-grabbing px-1 select-none"
+              className="text-gray-400 hover:text-gray-400 text-sm cursor-grab active:cursor-grabbing px-1 select-none"
               title="Drag to reorder"
               style={{ touchAction: 'none' }}
             >
@@ -3464,7 +3460,7 @@ function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onMo
                 className={`px-2.5 py-1 rounded-md text-[9px] font-black transition-all ${
                   mode === "binary"
                     ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
-                    : "text-gray-600 hover:text-gray-400 border border-transparent"
+                    : "text-gray-400 hover:text-gray-400 border border-transparent"
                 }`}>
                 ✓/✗
               </button>
@@ -3476,7 +3472,7 @@ function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onMo
                 className={`px-2.5 py-1 rounded-md text-[9px] font-black transition-all ${
                   mode === "scale"
                     ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
-                    : "text-gray-600 hover:text-gray-400 border border-transparent"
+                    : "text-gray-400 hover:text-gray-400 border border-transparent"
                 }`}>
                 1-10
               </button>
@@ -3493,13 +3489,13 @@ function ReorderablePropertyList({ propertyOrder, propertyModes, onReorder, onMo
           border: "1px solid rgba(255,255,255,0.06)",
         }}
       >
-        <span className="text-gray-700 text-sm px-1">⠿</span>
+        <span className="text-gray-400 text-sm px-1">⠿</span>
         <span
           className="w-2.5 h-2.5 rounded-full flex-shrink-0"
           style={{ background: "#60a5fa" }}
         />
-        <span className="text-xs text-gray-500 flex-1 font-medium">TIME (min)</span>
-        <span className="text-[9px] text-gray-600 px-2">always scale</span>
+        <span className="text-xs text-gray-400 flex-1 font-medium">TIME (min)</span>
+        <span className="text-[9px] text-gray-400 px-2">always scale</span>
       </div>
     </div>
   );
@@ -3515,7 +3511,7 @@ function DarkInput({ value, onChange, onEnter, placeholder, disabled, className 
     <input value={value} onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
       placeholder={placeholder} disabled={disabled}
-      className={`rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-700 outline-none transition-all ${className}`}
+      className={`rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-400 outline-none transition-all ${className}`}
       style={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.07)", fontFamily: "inherit" }}
       onFocus={(e) => (e.target.style.borderColor = "rgba(6,182,212,0.5)")}
       onBlur={(e)  => (e.target.style.borderColor = "rgba(255,255,255,0.07)")} />
@@ -3626,8 +3622,8 @@ function AuthApp() {
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4 text-gray-200 font-sans">
       <div className="mb-8 text-center">
-        <h1 className="text-4xl font-black bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent mb-2">AI Task Sorter</h1>
-        <p className="text-gray-400">Prioritize and sort your tasks with AI</p>
+        <h1 className="text-4xl font-black text-cyan-400 mb-2">AI Task Sorter</h1>
+        <p className="text-gray-300">Prioritize and sort your tasks with AI</p>
       </div>
       <div className="max-w-md w-full bg-gray-900 border border-gray-800 rounded-xl p-8 shadow-2xl relative overflow-hidden">
         <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-500 to-transparent" />
@@ -3636,14 +3632,14 @@ function AuthApp() {
         {error && <div className="mb-4 p-3 bg-red-900/30 border border-red-800 text-red-200 rounded-lg text-sm">{error}</div>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">USERNAME</label>
-            <input type="text" value={username} onChange={e => setUsername(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
+            <label htmlFor="auth-username" className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">USERNAME</label>
+            <input id="auth-username" name="username" autoComplete="username" type="text" value={username} onChange={e => setUsername(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">PASSWORD</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
+            <label htmlFor="auth-password" className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">PASSWORD</label>
+            <input id="auth-password" name="password" autoComplete={isLogin ? "current-password" : "new-password"} type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
           </div>
-          <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-400 hover:to-purple-400 text-white font-bold py-3 px-4 rounded-lg transition-all shadow-lg shadow-cyan-500/20 active:scale-[0.98]">
+          <button type="submit" disabled={loading} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition-all shadow-lg shadow-cyan-500/20 active:scale-[0.98]">
             {loading ? <Spinner /> : (isLogin ? "Login" : "Register")}
           </button>
         </form>
