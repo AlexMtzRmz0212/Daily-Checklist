@@ -119,6 +119,10 @@ class TaskUpdate(BaseModel):
 class SortRequest(BaseModel):
     tasks: List[Dict[str, Any]]
 
+class AIPlanRequest(SortRequest):
+    pick_count: int = Field(5, ge=1)                      # how many activities the AI may select
+    want_plan: bool = True                               # True ⇒ phase-grouped plan, False ⇒ ranked list
+
 class ReevaluateRequest(BaseModel):
     task_ids: List[str]
 
@@ -242,33 +246,50 @@ def _or_headers(api_key: str) -> Dict[str, str]:
     }
 
 def _clean_json_fence(text: str) -> str:
+    """Pull the JSON payload out of a model reply that may be wrapped in fences,
+    prefixed with chain-of-thought, or both. Returns the first balanced span that
+    actually parses — a brace inside prose or inside a string literal no longer
+    hijacks the scan the way a naive first-brace-to-match-brace search does."""
     text = (text or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    opener, closer = None, None
-    depth = 0
-    start = -1
+
+    # Models that think out loud sometimes emit the block inline instead of in the
+    # separate `reasoning` field.
+    text = re.sub(r"<(think|thinking|reasoning)>.*?</\1>", "", text, flags=re.S | re.I).strip()
+
+    first_balanced: Optional[str] = None
     for i, ch in enumerate(text):
-        if opener is None:
-            if ch == '{':
-                opener, closer = '{', '}'
-            elif ch == '[':
-                opener, closer = '[', ']'
-            else:
+        if ch not in "{[":
+            continue
+        closer = "}" if ch == "{" else "]"
+        depth, in_str, esc = 0, False, False
+        for j in range(i, len(text)):
+            c = text[j]
+            if in_str:
+                if esc:            esc = False
+                elif c == "\\":    esc = True
+                elif c == '"':     in_str = False
                 continue
-            start = i
-            depth = 1
-        else:
-            if ch == opener:
+            if c == '"':
+                in_str = True
+            elif c == ch:
                 depth += 1
-            elif ch == closer:
+            elif c == closer:
                 depth -= 1
                 if depth == 0:
-                    return text[start:i + 1]
-    return text
+                    candidate = text[i:j + 1]
+                    if first_balanced is None:
+                        first_balanced = candidate
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except ValueError:
+                        break  # unparseable span — keep scanning from the next opener
+    return first_balanced if first_balanced is not None else text
 
 def _attempt_fix_truncated_json(text: str) -> Optional[str]:
     text = text.strip()
@@ -312,6 +333,12 @@ async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 100
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # Every prompt here asks for a strict JSON object, so chain-of-thought is pure
+        # overhead — and on reasoning models (e.g. nvidia/nemotron-3-ultra) it silently
+        # eats the whole max_tokens budget, so the answer never arrives and the response
+        # comes back as raw thinking with finish_reason="length". OpenRouter normalises
+        # this flag across providers and ignores it for models without reasoning.
+        "reasoning": {"enabled": False},
     }
 
     last_error = ""
@@ -329,7 +356,22 @@ async def _call_openrouter(prompt: str, user: models.User, max_tokens: int = 100
             data = None
 
         if response.status_code == 200 and isinstance(data, dict) and data.get("choices"):
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice.get("message", {}).get("content") or ""
+            # A truncated answer is never valid JSON. Buy one bigger budget before
+            # giving up, so a verbose model doesn't fall through to the math sort.
+            if choice.get("finish_reason") == "length" and attempt < max_retries - 1:
+                payload["max_tokens"] = min(payload["max_tokens"] * 2, 8000)
+                last_error = "response truncated (finish_reason=length)"
+                continue
+            return content
+
+        # A provider that rejects the reasoning flag outright shouldn't cost us the
+        # whole request — drop it and try once more without.
+        if response.status_code == 400 and "reasoning" in payload and \
+                "reasoning" in (response.text or "").lower():
+            payload.pop("reasoning")
+            continue
 
         # Pull the most useful error message we can find.
         if isinstance(data, dict) and data.get("error"):
@@ -1160,31 +1202,79 @@ async def sort_tasks(request: SortRequest) -> Dict:
     sorted_tasks = sorted(request.tasks, key=sort_key)
     return {"sorted_ids": [t["Task_ID"] for t in sorted_tasks], "method": "mathematical"}
 
-@app.post("/tasks/ai-plan")
-async def ai_action_plan(request: SortRequest, current_user: models.User = Depends(auth.get_current_user)) -> Dict:
-    if not request.tasks:
-        return {"sorted_ids": [], "plan_text": "No tasks to plan.", "reasoning": "", "method": "ai"}
-
-    full_ids = [t["Task_ID"] for t in request.tasks]
-    tasks_summary = []
-    for i, task in enumerate(request.tasks, 1):
+def _build_task_lines(tasks: List[Dict]) -> List[str]:
+    """One numbered line per activity, carrying everything the model needs to choose
+    between them: scores, time estimate, free-text context and undone subtasks."""
+    lines = []
+    for i, task in enumerate(tasks, 1):
         u_label = "YES" if task.get("Urgency", 1)    == 10 else "NO"
         i_label = "YES" if task.get("Importance", 1) == 10 else "NO"
-        tasks_summary.append(
+        line = (
             f'{i}. ID:"{task["Task_ID"]}" | {task["Name"]}'
             f" | Urgent:{u_label} Important:{i_label}"
             f" | Hierarchy:{task.get('Hierarchy',10)} Priority:{task.get('Priority',10)}"
             f" (1=highest) | Time:{task.get('Time_Minutes',30)}min"
         )
 
-    prompt = f"""Output ONLY a JSON object — no explanation, no markdown fences.
+        context = (task.get("Context") or "").strip()
+        if context:
+            line += f" | Ctx: {context[:80]}"
 
-Build an optimized step-by-step sequence for the tasks below. DO NOT use specific clock times — assign an estimated DURATION to each activity instead. Group activities into logical phases for maximum efficiency (e.g. room/home chores together, out-of-house errands together, prep/repair together). Keep it brief, direct, and scannable.
+        # Undone subtasks first — they describe what the activity still involves.
+        subs = task.get("Subtasks") or []
+        names = [s.get("name", "") for s in subs if not s.get("done")] + \
+                [s.get("name", "") for s in subs if s.get("done")]
+        names = [n for n in names if n]
+        if names:
+            shown = "; ".join(names[:5])
+            if len(names) > 5:
+                shown += f"; +{len(names) - 5} more"
+            line += f" | Subtasks: {shown}"
 
-If the total estimated duration exceeds 8 hours (480 minutes), move the lower-priority tasks into the future array and leave them out of the plan.
+        lines.append(line)
+    return lines
 
-Tasks:
-{chr(10).join(tasks_summary)}
+# Shared selection criteria — identical in both modes so the picks don't change
+# meaning depending on whether the user asked for a plan.
+_PICK_CRITERIA = """Choose using this precedence:
+1. Urgent AND Important first.
+2. Then lower Hierarchy / Priority numbers (1 = highest).
+3. Then activities that unblock other work.
+4. Then quick wins that clear the board cheaply."""
+
+def _build_pick_prompt(lines: List[str], k: int) -> str:
+    return f"""Output ONLY a JSON object — no explanation, no markdown fences.
+
+From the {len(lines)} activities below, select EXACTLY {k} that deserve priority right now. Return them ranked, most important first.
+
+{_PICK_CRITERIA}
+
+Activities:
+{chr(10).join(lines)}
+
+Respond with exactly this JSON and nothing else:
+{{
+  "picks": [
+    {{"task_id": "<ID from the list above>", "why": "<why this one, 12 words max>"}}
+  ]
+}}
+
+Rules:
+- "picks" must contain exactly {k} entries, ranked, no duplicates.
+- Use only IDs that appear above, copied exactly.
+- No markdown symbols like # or * anywhere."""
+
+def _build_plan_prompt(lines: List[str], k: int) -> str:
+    return f"""Output ONLY a JSON object — no explanation, no markdown fences.
+
+From the {len(lines)} activities below, select EXACTLY {k} that deserve priority right now, then build an optimized step-by-step sequence for those {k} only. Ignore the rest entirely.
+
+{_PICK_CRITERIA}
+
+DO NOT use specific clock times — assign an estimated DURATION to each activity instead. Group activities into logical phases for maximum efficiency (e.g. room/home chores together, out-of-house errands together, prep/repair together). Keep it brief, direct, and scannable.
+
+Activities:
+{chr(10).join(lines)}
 
 Write "plan_text" using EXACTLY this layout (plain text, use \\n for new lines):
 Phase 1: <Group Name> (~<total range> mins)
@@ -1195,6 +1285,7 @@ Phase 2: <Group Name> (~<total range> mins)
 <Activity>: <duration> mins (<short optional tip>).
 
 Rules for plan_text:
+- Cover exactly the {k} selected activities — no more, no fewer.
 - Number phases sequentially and give each a short logical group name.
 - Show an estimated total duration range in each phase header.
 - One activity per line, each ending with its duration in mins.
@@ -1204,59 +1295,109 @@ Rules for plan_text:
 
 Respond with exactly this JSON and nothing else:
 {{
-  "sorted_task_ids": ["<array of IDs scheduled for today, in execution order>"],
-  "future_task_ids": ["<array of IDs deferred to a future day>"],
-  "plan_text": "<phase-grouped, duration-based plan formatted exactly as described above>",
-  "reasoning": "<1 short sentence explaining the grouping logic and what was deferred, if anything>"
+  "sorted_task_ids": ["<the {k} selected IDs, in execution order>"],
+  "plan_text": "<phase-grouped, duration-based plan formatted exactly as described above>"
 }}
 """
 
+def _math_rank(tasks: List[Dict]) -> List[Dict]:
+    """Deterministic urgency/importance ranking — the fallback when AI output is unusable."""
+    def sort_key(t: Dict) -> tuple:
+        return (
+            -(t.get("Urgency", 1) * t.get("Importance", 1)),
+            t.get("Hierarchy", 10),   # 1 = highest, so ascending
+            t.get("Priority", 10),    # 1 = highest, so ascending
+            _normalize_time_for_sorting(t.get("Time_Minutes", 30)),
+            -t.get("Relevance", 1),
+        )
+    return sorted(tasks, key=sort_key)
+
+@app.post("/tasks/ai-plan")
+async def ai_action_plan(request: AIPlanRequest, current_user: models.User = Depends(auth.get_current_user)) -> Dict:
+    """Select `pick_count` activities out of the ones sent, and either lay them out as a
+    phase-grouped plan (want_plan) or return them as a ranked shortlist.
+
+    `sorted_ids` holds ONLY the picks — the caller keeps the unpicked tasks itself."""
+    mode = "plan" if request.want_plan else "list"
+    if not request.tasks:
+        return {"sorted_ids": [], "picks": [], "plan_text": "No tasks to plan.",
+                "mode": mode, "method": "ai"}
+
+    # Never trust the client's count: it can drift out of range as tasks are added/removed.
+    k = max(1, min(request.pick_count, len(request.tasks)))
+
+    by_id    = {t["Task_ID"]: t for t in request.tasks}
+    lines    = _build_task_lines(request.tasks)
+    prompt   = _build_plan_prompt(lines, k) if request.want_plan else _build_pick_prompt(lines, k)
+
     raw = ""
     try:
-        raw = await _call_openrouter(prompt, current_user, max_tokens=1200, temperature=0.1)
-        cleaned = _clean_json_fence(raw)
-        plan = json.loads(cleaned)
+        raw = await _call_openrouter(
+            prompt, current_user,
+            max_tokens=1200 if request.want_plan else 600,
+            temperature=0.1,
+        )
+        plan = json.loads(_clean_json_fence(raw))
+        if not isinstance(plan, dict):
+            raise ValueError("Response is not a JSON object")
 
-        if not isinstance(plan, dict) or "sorted_task_ids" not in plan:
-            raise ValueError("Missing sorted_task_ids")
+        if request.want_plan:
+            if "sorted_task_ids" not in plan:
+                raise ValueError("Missing sorted_task_ids")
+            raw_ids = plan["sorted_task_ids"]
+            whys: Dict[str, str] = {}
+        else:
+            picks = plan.get("picks")
+            if not isinstance(picks, list):
+                raise ValueError("Missing picks")
+            raw_ids = [p.get("task_id") for p in picks if isinstance(p, dict)]
+            whys = {p["task_id"]: str(p.get("why", "")).strip()
+                    for p in picks if isinstance(p, dict) and p.get("task_id")}
 
-        task_ids   = set(full_ids)
-        sorted_ids = [tid for tid in plan["sorted_task_ids"] if tid in task_ids]
-        
-        future_ids = plan.get("future_task_ids", [])
-        if not isinstance(future_ids, list):
-            future_ids = []
-            
-        future_task_ids = [tid for tid in future_ids if tid in task_ids and tid not in sorted_ids]
-        
-        seen = set(sorted_ids) | set(future_task_ids)
-        sorted_ids.extend(tid for tid in full_ids if tid not in seen)
+        # Keep only real IDs, drop duplicates, and cap at k — models over-return.
+        seen: set = set()
+        sorted_ids = []
+        for tid in raw_ids:
+            if tid in by_id and tid not in seen:
+                seen.add(tid)
+                sorted_ids.append(tid)
+        sorted_ids = sorted_ids[:k]
+
+        # Under-return is recoverable: top up from the math ranking rather than
+        # handing back fewer picks than the user asked for.
+        if len(sorted_ids) < k:
+            for t in _math_rank(request.tasks):
+                if len(sorted_ids) >= k:
+                    break
+                if t["Task_ID"] not in seen:
+                    seen.add(t["Task_ID"])
+                    sorted_ids.append(t["Task_ID"])
 
         return {
             "sorted_ids": sorted_ids,
-            "future_task_ids": future_task_ids,
-            "plan_text":  plan.get("plan_text", ""),
-            "reasoning":  plan.get("reasoning", ""),
-            "method":     "ai",
+            "picks": [{"task_id": tid, "name": by_id[tid]["Name"], "why": whys.get(tid, "")}
+                      for tid in sorted_ids],
+            "plan_text": plan.get("plan_text", "") if request.want_plan else "",
+            "mode":      mode,
+            "method":    "ai",
         }
 
     except (json.JSONDecodeError, ValueError):
         print(f"AI plan parse failed — falling back to math sort. Raw: {raw!r}")
-        def sort_key(t: Dict) -> tuple:
-            return (
-                -(t.get("Urgency", 1) * t.get("Importance", 1)),
-                t.get("Hierarchy", 10),   # 1 = highest, so ascending
-                t.get("Priority", 10),    # 1 = highest, so ascending
-                _normalize_time_for_sorting(t.get("Time_Minutes", 30)),
-                -t.get("Relevance", 1),
+        picked = _math_rank(request.tasks)[:k]
+        plan_text = ""
+        if request.want_plan:
+            body = "\n".join(
+                f"{t['Name']}: {t.get('Time_Minutes', 30)} mins." for t in picked
             )
-        sorted_tasks = sorted(request.tasks, key=sort_key)
+            total = sum(t.get("Time_Minutes", 30) for t in picked)
+            plan_text = f"Phase 1: Top Priorities (~{total} mins)\n{body}"
         return {
-            "sorted_ids": [t["Task_ID"] for t in sorted_tasks],
-            "future_task_ids": [],
-            "plan_text":  "Sorted automatically by urgency, importance, and priority.",
-            "reasoning":  "AI plan could not be parsed; mathematical sort applied.",
-            "method":     "math_fallback",
+            "sorted_ids": [t["Task_ID"] for t in picked],
+            "picks": [{"task_id": t["Task_ID"], "name": t["Name"], "why": ""} for t in picked],
+            "plan_text": plan_text,
+            "mode":      mode,
+            "method":    "math_fallback",
         }
 
 @app.put("/tasks/{task_id}")

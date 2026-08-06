@@ -175,6 +175,8 @@ function MainApp() {
   const [aiPlanResult, setAIPlanResult]       = useState(null);
   const [aiPlanPhase, setAiPlanPhase]         = useState("idle");
   const [aiPlanError, setAiPlanError]         = useState("");
+  const [aiPickCount, setAiPickCount]         = useState(5);       // how many activities the AI may pick
+  const [aiWantPlan, setAiWantPlan]           = useState(true);    // true ⇒ phase plan, false ⇒ ranked list
 
   const [propertyOrder, setPropertyOrder] = useState(SCORING_PROP_KEYS);
 
@@ -656,17 +658,24 @@ function MainApp() {
 
   const handleAIPlan = async () => {
     const mergedTasks = tasks.map(merged);
+    // Only real activities are pickable: 📁 categories group work, they aren't work.
+    const pool = mergedTasks.filter((t) => t.Node_Type !== "category");
     setAiPlanPhase("loading");
     setAiPlanError("");
     try {
       const result = await apiFetch("/tasks/ai-plan", {
         method: "POST",
-        body: JSON.stringify({ tasks: mergedTasks }),
+        body: JSON.stringify({
+          tasks: pool,
+          pick_count: Math.min(Math.max(aiPickCount, 1), Math.max(pool.length, 1)),
+          want_plan: aiWantPlan,
+        }),
       });
-      // Apply the AI ordering to the task list
+      // Float the picks to the top; everything else (categories included) keeps its order.
       const byId = Object.fromEntries(mergedTasks.map((t) => [t.Task_ID, t]));
-      setTasks(result.sorted_ids.map((id) => byId[id]).filter(Boolean));
-      setLocalEdits({});
+      const picked = result.sorted_ids.map((id) => byId[id]).filter(Boolean);
+      const pickedIds = new Set(picked.map((t) => t.Task_ID));
+      setTasks([...picked, ...mergedTasks.filter((t) => !pickedIds.has(t.Task_ID))]);
       setAIPlanResult(result);
       setViewMode("ai-plan");
     } catch (e) {
@@ -771,6 +780,10 @@ function MainApp() {
   }, []);
 
   const sortedTasks  = getSortedTasks();
+  // AI Plan pool: pickable activities only (categories are containers, not work).
+  const aiPoolCount  = tasks.reduce((n, t) => n + (t.Node_Type !== "category" ? 1 : 0), 0);
+  // Derived, not synced — deleting tasks can't leave the stepper stranded above the max.
+  const aiPickShown  = Math.min(Math.max(aiPickCount, 1), Math.max(aiPoolCount, 1));
   const isSorting    = sortPhase === "sorting";
   const isRevaluating = revalPhase === "loading";
   const bulkItems    = parseBulkText(bulkText);
@@ -1507,7 +1520,11 @@ function MainApp() {
             aiPlanPhase={aiPlanPhase}
             aiPlanError={aiPlanError}
             onGenerate={handleAIPlan}
-            hasTasks={tasks.length > 0}
+            poolCount={aiPoolCount}
+            pickCount={aiPickShown}
+            onPickCountChange={setAiPickCount}
+            wantPlan={aiWantPlan}
+            onWantPlanChange={setAiWantPlan}
           />
         ) : viewMode === "archive" ? (
           <ArchiveView
@@ -1662,8 +1679,15 @@ function ArchiveView({ refreshSignal, onRestore, onDelete }) {
 //  AIPlanTab
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTasks }) {
+function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate,
+                    poolCount, pickCount, onPickCountChange, wantPlan, onWantPlanChange }) {
   const isLoading = aiPlanPhase === "loading";
+  const hasTasks  = poolCount > 0;
+  const maxPicks  = Math.max(poolCount, 1);
+  const stepBtn   = "w-7 h-3.5 flex items-center justify-center rounded text-[11px] leading-none hover:bg-white/10 transition-colors disabled:opacity-30 disabled:hover:bg-transparent";
+
+  // A ranked list is still a plan's shortlist, so both modes share one result card.
+  const isListMode = aiPlanResult?.mode === "list";
 
   return (
     <motion.div
@@ -1671,18 +1695,94 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
       className="rounded-2xl p-6"
       style={{ background: "#0f172a", border: "1px solid rgba(139,92,246,0.25)" }}>
 
-      <div className="flex items-center justify-between mb-6">
+      {/* Wraps rather than clips once the stepper + toggle + button stop fitting. */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h2 className="text-xl font-black" style={{ color: "#a78bfa" }}>🤖 AI Action Plan</h2>
-        <motion.button
-          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
-          onClick={onGenerate}
-          disabled={isLoading || !hasTasks}
-          className="px-5 py-2 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
-          style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
-          {isLoading
-            ? <span className="flex items-center gap-2"><Spinner /> PLANNING…</span>
-            : aiPlanResult ? "↺ REGENERATE" : "⚡ GENERATE PLAN"}
-        </motion.button>
+
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Pick count — ＋ / value / − stacked, so the three read as one spinner rather
+              than as three buttons in a row. The value keeps a fixed width so going from
+              9 to 10 can't resize the pill. */}
+          <div className="flex items-center gap-2 px-3 py-1 rounded-xl"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <span className="text-[10px] font-black tracking-widest uppercase text-gray-400">Pick</span>
+            <div className="flex flex-col items-center">
+              <button
+                onClick={() => onPickCountChange(Math.min(pickCount + 1, maxPicks))}
+                disabled={isLoading || pickCount >= maxPicks}
+                aria-label="Pick one more activity"
+                className={stepBtn} style={{ color: "#94a3b8" }}>＋</button>
+              <span className="font-mono text-sm font-bold w-7 text-center leading-none py-[3px]"
+                style={{ color: "#a78bfa" }}>{pickCount}</span>
+              <button
+                onClick={() => onPickCountChange(Math.max(pickCount - 1, 1))}
+                disabled={isLoading || pickCount <= 1}
+                aria-label="Pick one fewer activity"
+                className={stepBtn} style={{ color: "#94a3b8" }}>−</button>
+            </div>
+            <span className="text-[10px] text-gray-400 whitespace-nowrap">of {poolCount}</span>
+          </div>
+
+          {/* LIST ⇄ PLAN — a switch flanked by both labels, so it reads as a choice
+              between two modes rather than as one feature being on or off. The knob
+              always sits on the side of the mode you'll get. */}
+          <button
+            onClick={() => onWantPlanChange(!wantPlan)}
+            disabled={isLoading}
+            role="switch"
+            aria-checked={wantPlan}
+            aria-label="Output mode: list or plan"
+            title={wantPlan
+              ? "Plan: the picks are laid out in timed phases — flip for a plain ranked list"
+              : "List: the picks come back ranked, with a reason each — flip for a timed plan"}
+            className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl transition-all disabled:opacity-40"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <span className="text-[10px] font-black tracking-widest uppercase transition-colors"
+              style={{ color: wantPlan ? "#475569" : "#e2e8f0" }}>List</span>
+            <span className="relative flex items-center rounded-full"
+              style={{
+                width: 34, height: 18, padding: 2,
+                background: wantPlan ? "rgba(139,92,246,0.35)" : "rgba(255,255,255,0.10)",
+                border: `1px solid ${wantPlan ? "rgba(139,92,246,0.55)" : "rgba(255,255,255,0.16)"}`,
+                transition: "background 0.2s, border-color 0.2s",
+              }}>
+              <motion.span
+                animate={{ x: wantPlan ? 16 : 0 }}
+                transition={{ type: "spring", stiffness: 500, damping: 32 }}
+                className="rounded-full"
+                style={{
+                  width: 12, height: 12,
+                  background: wantPlan ? "#a78bfa" : "#e2e8f0",
+                  boxShadow: wantPlan ? "0 0 8px rgba(139,92,246,0.6)" : "none",
+                }} />
+            </span>
+            <span className="text-[10px] font-black tracking-widest uppercase transition-colors"
+              style={{ color: wantPlan ? "#a78bfa" : "#475569" }}>Plan</span>
+          </button>
+
+          <motion.button
+            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.94 }}
+            onClick={onGenerate}
+            disabled={isLoading || !hasTasks}
+            title={!hasTasks
+              ? "Nothing to pick from — add some activities first"
+              : wantPlan
+                ? `Pick the ${pickCount} activities worth doing now out of ${poolCount}, and lay them out in timed phases`
+                : `Pick the ${pickCount} activities worth doing now out of ${poolCount}, ranked, with a reason each`}
+            className="px-5 py-2 rounded-xl font-black text-sm tracking-[0.15em] uppercase disabled:opacity-40"
+            style={{ background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontFamily: "inherit" }}>
+            {/* All labels share one grid cell, sized by the widest of them, so flipping the
+                switch or starting a run can't resize the button and shove the row around. */}
+            <span className="grid">
+              <span aria-hidden="true" className="col-start-1 row-start-1 invisible whitespace-nowrap">⚡ GENERATE PLAN</span>
+              <span className="col-start-1 row-start-1 flex items-center justify-center gap-2 whitespace-nowrap">
+                {isLoading
+                  ? <><Spinner /> {wantPlan ? "PLANNING…" : "PICKING…"}</>
+                  : aiPlanResult ? "↺ REGENERATE" : wantPlan ? "⚡ GENERATE PLAN" : `⚡ PICK ${pickCount}`}
+              </span>
+            </span>
+          </motion.button>
+        </div>
       </div>
 
       {aiPlanError && (
@@ -1693,8 +1793,12 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
         <div className="flex flex-col items-center justify-center py-16 gap-6">
           <SpinRing color="purple" />
           <div className="text-center">
-            <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">Building Plan</p>
-            <p className="text-gray-400 text-xs tracking-widest">analyzing task relationships…</p>
+            <p className="text-purple-300 text-sm tracking-[0.4em] uppercase font-black mb-1">
+              {wantPlan ? "Building Plan" : "Picking Activities"}
+            </p>
+            <p className="text-gray-400 text-xs tracking-widest">
+              {wantPlan ? "analyzing task relationships…" : `weighing ${poolCount} activities…`}
+            </p>
           </div>
         </div>
       )}
@@ -1704,7 +1808,9 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
           <p className="text-5xl mb-4">🤖</p>
           <p className="text-gray-400 font-black tracking-widest text-sm uppercase">No plan yet</p>
           <p className="text-gray-400 text-xs mt-2">
-            {hasTasks ? "Click Generate Plan to have AI create an action plan for your tasks." : "Add tasks first, then generate a plan."}
+            {hasTasks
+              ? "Choose how many activities to pick, then generate. Turn PLAN off for just the shortlist."
+              : "Add tasks first, then generate a plan."}
           </p>
         </div>
       )}
@@ -1712,31 +1818,38 @@ function AIPlanTab({ aiPlanResult, aiPlanPhase, aiPlanError, onGenerate, hasTask
       {!isLoading && aiPlanResult && (
         <div className="space-y-6">
           <div>
-            <h3 className="text-cyan-400 text-xs font-black tracking-widest uppercase mb-3">📋 Action Plan</h3>
+            <h3 className="text-cyan-400 text-xs font-black tracking-widest uppercase mb-3">
+              {isListMode ? `🎯 Top ${aiPlanResult.picks?.length || 0} Picks` : "📋 Action Plan"}
+            </h3>
             <div className="rounded-xl p-4 text-sm leading-relaxed space-y-1"
               style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-              {(aiPlanResult.plan_text || "").split("\n").map((line, i) => {
-                const trimmed = line.trim();
-                if (!trimmed) return <div key={i} className="h-2" />;
-                const isPhase = /^phase\b/i.test(trimmed);
-                return isPhase ? (
-                  <p key={i} className="text-cyan-300 font-black mt-4 first:mt-0">{trimmed}</p>
-                ) : (
-                  <p key={i} className="text-gray-300 pl-3">{trimmed}</p>
-                );
-              })}
+              {isListMode ? (
+                <ol className="space-y-3">
+                  {(aiPlanResult.picks || []).map((pick, i) => (
+                    <li key={pick.task_id || i} className="flex gap-3">
+                      <span className="font-mono text-xs font-black shrink-0 w-6 text-right pt-0.5"
+                        style={{ color: "#a78bfa" }}>{i + 1}.</span>
+                      <div className="min-w-0">
+                        <p className="text-gray-200 font-bold break-words">{pick.name}</p>
+                        {pick.why && <p className="text-gray-400 text-xs mt-0.5 break-words">{pick.why}</p>}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                (aiPlanResult.plan_text || "").split("\n").map((line, i) => {
+                  const trimmed = line.trim();
+                  if (!trimmed) return <div key={i} className="h-2" />;
+                  const isPhase = /^phase\b/i.test(trimmed);
+                  return isPhase ? (
+                    <p key={i} className="text-cyan-300 font-black mt-4 first:mt-0">{trimmed}</p>
+                  ) : (
+                    <p key={i} className="text-gray-300 pl-3">{trimmed}</p>
+                  );
+                })
+              )}
             </div>
           </div>
-
-          {aiPlanResult.reasoning && (
-            <div>
-              <h3 className="text-purple-400 text-xs font-black tracking-widest uppercase mb-3">🧠 Reasoning</h3>
-              <div className="rounded-xl p-4"
-                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                <p className="text-gray-400 text-sm leading-relaxed">{aiPlanResult.reasoning}</p>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </motion.div>
