@@ -21,6 +21,7 @@ class Task(Base):
     Name = Column(String, index=True)
     Context = Column(String, default="")
     Status = Column(String, default="Active")
+    Notion_Status = Column(String, nullable=True)  # Raw Notion "Status" property value, before collapsing into Status
     Priority = Column(Integer, default=5)
     Hierarchy = Column(Integer, default=5)
     Time_Minutes = Column(Integer, default=30)

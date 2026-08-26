@@ -59,6 +59,7 @@ def ensure_columns() -> None:
         "Notion_Page_ID": "VARCHAR",
         "Node_Type": "VARCHAR",
         "Focus": "INTEGER",
+        "Notion_Status": "VARCHAR",
     }
     inspector = inspect(engine)
     if "tasks" not in inspector.get_table_names():

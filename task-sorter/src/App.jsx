@@ -1888,6 +1888,24 @@ function buildTree(tasks) {
   return { nodeMap, roots };
 }
 
+// "Parent" is a structural Notion Status word (it marks a branch row so it isn't swept
+// into a "Complete" group) rather than a real progress state, so it never gets a bracket.
+function bracketFor(raw) {
+  const s = (raw || "").trim();
+  if (!s || s.toLowerCase() === "parent") return "";
+  return ` [${s}]`;
+}
+
+// A row's own Notion Status wins, since it is the richer label ("In progress", "Explored").
+// Rows that have none — anything created locally rather than imported — fall back to the
+// app's derived Status so every line still carries a bracket. A "Parent" row is the one
+// deliberate blank: it returns early instead of falling back.
+function statusBracket(t) {
+  const raw = (t.Notion_Status || "").trim();
+  if (raw) return bracketFor(raw);
+  return bracketFor(t.Status);
+}
+
 // Render the task tree as a plain-text outline (box-drawing chars) for copy/paste.
 function treeToText(nodeMap, roots) {
   const lines = [];
@@ -1895,12 +1913,12 @@ function treeToText(nodeMap, roots) {
     const t = nodeMap.get(id);
     if (!t) return;
     const icon = t.Node_Type === "category" ? "📁" : "📋";
-    lines.push(`${prefix}${connector}${icon} ${t.Name} [${t.Status}]`);
+    lines.push(`${prefix}${connector}${icon} ${t.Name}${statusBracket(t)}`);
     const subs = t.Subtasks || [];
     const kids = t.children || [];
     subs.forEach((s, i) => {
       const last = i === subs.length - 1 && kids.length === 0;
-      lines.push(`${childPrefix}${last ? "└─ " : "├─ "}${s.done ? "☑" : "☐"} ${s.name}`);
+      lines.push(`${childPrefix}${last ? "└─ " : "├─ "}${s.done ? "☑" : "☐"} ${s.name}${bracketFor(s.notion_status)}`);
     });
     kids.forEach((c, i) => {
       const last = i === kids.length - 1;
@@ -1930,12 +1948,13 @@ function treeToLines(nodeMap, roots, collapsed) {
     const hasChildren = kids.length > 0;
     const isCollapsed = collapsed.has(id);
     lines.push({ kind: "node", key: key++, id, prefix, connector, hasChildren, isCollapsed,
-                 icon, name: t.Name, status: t.Status, notion: !!t.Notion_Page_ID });
+                 icon, name: t.Name, statusBracket: statusBracket(t), notion: !!t.Notion_Page_ID });
     if (isCollapsed) return; // fold: skip subtasks and child nodes
     subs.forEach((s, i) => {
       const last = i === subs.length - 1 && kids.length === 0;
       lines.push({ kind: "sub", key: key++, childPrefix, connector: last ? "└─ " : "├─ ",
-                   done: s.done, name: s.name, notion: !!s.notion_id });
+                   done: s.done, name: s.name, statusBracket: bracketFor(s.notion_status),
+                   notion: !!s.notion_id });
     });
     kids.forEach((c, i) => {
       const last = i === kids.length - 1;
@@ -1966,7 +1985,7 @@ function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
         <div key={ln.key}>
           <span>{ln.childPrefix}{ln.connector}</span>
           <span className="inline-block w-4" />
-          <span>{ln.done ? "☑" : "☐"} </span>{originMark}<span>{ln.name}</span>
+          <span>{ln.done ? "☑" : "☐"} </span>{originMark}<span>{ln.name}{ln.statusBracket}</span>
         </div>
       );
     }
@@ -1983,7 +2002,7 @@ function TextTreeColumns({ nodeMap, roots, collapsed, toggle }) {
         ) : (
           <span className="inline-block w-4 text-center text-gray-400">◦</span>
         )}
-        <span>{ln.icon} </span>{originMark}<span>{ln.name} [{ln.status}]</span>
+        <span>{ln.icon} </span>{originMark}<span>{ln.name}{ln.statusBracket}</span>
       </div>
     );
   };
@@ -3310,6 +3329,12 @@ function SubtaskSection({ task, onAdded, onToggled, onDeleted }) {
                   style={{ color: st.done ? "#475569" : "#cbd5e1", textDecoration: st.done ? "line-through" : "none" }}>
                   {st.name}
                 </span>
+                {bracketFor(st.notion_status) && (
+                  <span className="text-[10px] font-mono flex-shrink-0"
+                    style={{ color: st.done ? "#334155" : "#64748b" }}>
+                    {bracketFor(st.notion_status).trim()}
+                  </span>
+                )}
                 <button onClick={() => onDeleted(st.id)} className="text-[9px] transition-colors flex-shrink-0"
                   style={{ color: "#1e293b" }}
                   onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}

@@ -523,6 +523,7 @@ def _task_to_dict(task: models.Task) -> Dict:
         "Name": task.Name,
         "Context": task.Context,
         "Status": task.Status,
+        "Notion_Status": task.Notion_Status,
         "Priority": task.Priority,
         "Hierarchy": task.Hierarchy,
         "Time_Minutes": task.Time_Minutes,
@@ -764,16 +765,23 @@ def _derive_status(archive: Optional[str], notion_status: str, complete_names: f
         return "Forgotten"
     return _notion_status_to_app(notion_status, complete_names)
 
-def _upsert_subtask(parent_task: models.Task, notion_id: str, name: str, done: bool) -> None:
-    """Fold a Notion leaf into the parent task's Subtasks, matching by notion_id."""
+def _upsert_subtask(parent_task: models.Task, notion_id: str, name: str, done: bool,
+                    notion_status: Optional[str] = None) -> None:
+    """Fold a Notion leaf into the parent task's Subtasks, matching by notion_id.
+
+    ``notion_status`` keeps the leaf's raw Notion Status alongside the collapsed ``done``
+    boolean, so the tree can label a subtask with its real state ("In progress", "Blocked")
+    instead of only a checkbox."""
     subs = list(parent_task.Subtasks or [])
     for s in subs:
         if s.get("notion_id") == notion_id:
             s["name"] = name
             s["done"] = done
+            s["notion_status"] = notion_status
             parent_task.Subtasks = subs   # reassign so SQLAlchemy detects the JSON change
             return
-    subs.append({"id": str(uuid.uuid4()), "name": name, "done": done, "notion_id": notion_id})
+    subs.append({"id": str(uuid.uuid4()), "name": name, "done": done,
+                 "notion_id": notion_id, "notion_status": notion_status})
     parent_task.Subtasks = subs
 
 def _prune_notion_subtasks(task: models.Task, present_notion_ids: set) -> None:
@@ -882,6 +890,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
             continue
         node_type = "category" if role == "category" else "task"
         status = _derive_status(classes[nid]["archive"], pg["status"], complete_names)
+        notion_status = pg["status"] or None
         h = _clamp_1_10(pg["hierarchy"])
         p = _clamp_1_10(pg["priority"])
         task = existing_by_notion.get(nid)
@@ -889,6 +898,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
             task.Name = pg["title"]
             task.Context = pg["description"] or task.Context or ""
             task.Status = status
+            task.Notion_Status = notion_status
             task.Node_Type = node_type
             if h is not None:
                 task.Hierarchy = h
@@ -901,6 +911,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
                 Name=pg["title"],
                 Context=pg["description"] or "",
                 Status=status,
+                Notion_Status=notion_status,
                 Node_Type=node_type,
                 Subtasks=[],
                 Notion_Page_ID=nid,
@@ -932,7 +943,7 @@ async def notion_import(request: NotionImportRequest, db: Session = Depends(get_
         if parent_task is None:
             continue  # defensive: a subtask always has a non-leaf parent
         done = _derive_status(classes[nid]["archive"], pg["status"], complete_names) != "Active"
-        _upsert_subtask(parent_task, nid, pg["title"], done)
+        _upsert_subtask(parent_task, nid, pg["title"], done, pg["status"] or None)
 
     # Prune Notion-sourced subtasks that vanished from Notion (keep local-only ones).
     present_ids = set(by_notion)
