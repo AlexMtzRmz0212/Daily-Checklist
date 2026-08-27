@@ -6,3 +6,21 @@
    don't fight the cursor while a node is actively being dragged. */
 .react-flow__node { transition: transform 0.35s ease; }
 .react-flow__node.dragging { transition: none; }
+
+/* Flow tree controls: React Flow ships light-theme defaults — a #fefefe button with
+   `color: inherit`, which picks up the app's white text and leaves the icons
+   (fill: currentColor) invisible on their own background. Repoint the library's own
+   custom properties instead of restyling the button, so hover, border and disabled
+   states keep working. Colours match the surrounding panels and the MiniMap. */
+.react-flow__controls {
+  --xy-controls-button-background-color: #0f172a;
+  --xy-controls-button-background-color-hover: #1e293b;
+  --xy-controls-button-color: #cbd5e1;
+  --xy-controls-button-color-hover: #22d3ee;
+  --xy-controls-button-border-color: rgba(255, 255, 255, 0.08);
+  --xy-controls-box-shadow: 0 4px 16px rgba(2, 6, 23, 0.6);
+
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}

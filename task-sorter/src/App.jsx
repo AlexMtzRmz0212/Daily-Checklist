@@ -9,6 +9,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import { hierarchy, tree } from "d3-hierarchy";
 import { fetchApi } from "./utils/api";
+import { API } from "./apiBase";
+import Landing from "./Landing";
 
 // Self-contained BitToByte family cross-link footer (plain inline styles — no
 // dependency on the Tailwind-4 ui library, which this Tailwind-3 app can't ingest).
@@ -54,7 +56,6 @@ function BrandFooter() {
   );
 }
 
-const API = import.meta.env.DEV ? "http://localhost:8000" : "/api";
 
 const PROPERTIES = [
   { key: "Priority",      label: "PRIORITY",   hex: "#f87171", bar: "#ef4444" },
@@ -3701,97 +3702,6 @@ function Spinner() {
 //region Auth & Wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AuthApp() {
-  const [isLogin, setIsLogin] = useState(true);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      if (isLogin) {
-        const formData = new URLSearchParams();
-        formData.append("username", username);
-        formData.append("password", password);
-        let data;
-        try {
-          data = await fetchApi(`${API}/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: formData
-          });
-        } catch (err) {
-          throw new Error("Invalid credentials");
-        }
-        localStorage.setItem("token", data.access_token);
-        window.location.reload();
-      } else {
-        try {
-          await fetchApi(`${API}/register`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password })
-          });
-        } catch (err) {
-          let msg = "Registration failed";
-          const match = err.message.match(/API Error \(\d+\): (.*)/);
-          if (match) {
-            try {
-              const parsed = JSON.parse(match[1]);
-              if (parsed.detail) msg = parsed.detail;
-            } catch(e) {}
-          }
-          throw new Error(msg);
-        }
-        setIsLogin(true);
-        setError("Registration successful! Please log in.");
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4 text-gray-200 font-sans">
-      <div className="mb-8 text-center">
-        <h1 className="text-4xl font-black text-cyan-400 mb-2">AI Task Sorter</h1>
-        <p className="text-gray-300">Prioritize and sort your tasks with AI</p>
-      </div>
-      <div className="max-w-md w-full bg-gray-900 border border-gray-800 rounded-xl p-8 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-500 to-transparent" />
-        
-        <h2 className="text-2xl font-bold mb-6 text-center text-white">{isLogin ? "Welcome Back" : "Create Account"}</h2>
-        {error && <div className="mb-4 p-3 bg-red-900/30 border border-red-800 text-red-200 rounded-lg text-sm">{error}</div>}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="auth-username" className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">USERNAME</label>
-            <input id="auth-username" name="username" autoComplete="username" type="text" value={username} onChange={e => setUsername(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
-          </div>
-          <div>
-            <label htmlFor="auth-password" className="block text-xs font-semibold text-gray-400 mb-1 tracking-wider">PASSWORD</label>
-            <input id="auth-password" name="password" autoComplete={isLogin ? "current-password" : "new-password"} type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all" />
-          </div>
-          <button type="submit" disabled={loading} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition-all shadow-lg shadow-cyan-500/20 active:scale-[0.98]">
-            {loading ? <Spinner /> : (isLogin ? "Login" : "Register")}
-          </button>
-        </form>
-        <div className="mt-6 text-center text-sm text-gray-400">
-          {isLogin ? "Don't have an account? " : "Already have an account? "}
-          <button type="button" onClick={() => { setIsLogin(!isLogin); setError(""); }} className="text-cyan-400 hover:text-cyan-300 font-semibold transition-colors">
-            {isLogin ? "Register" : "Login"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -3821,7 +3731,7 @@ export default function App() {
 
   return (
     <>
-      {isAuthenticated ? <MainApp /> : <AuthApp />}
+      {isAuthenticated ? <MainApp /> : <Landing />}
       <BrandFooter />
     </>
   );
